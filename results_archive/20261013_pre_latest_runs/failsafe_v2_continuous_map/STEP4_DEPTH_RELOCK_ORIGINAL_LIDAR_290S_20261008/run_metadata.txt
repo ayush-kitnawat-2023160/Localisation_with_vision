@@ -1,0 +1,8 @@
+case=STEP4_DEPTH_RELOCK_ORIGINAL_LIDAR_290S_20261008
+sensor=lidar
+bag_path=/home/devil/Desktop/car/alive-repo/rosbag/camera_lidar_imu_gps.bag
+reference=/home/devil/Desktop/car/alive-repo/old_tests/temp_fast_livo_2/output_image_voxel_loopclosed/optimized_trajectory.csv
+play_duration_s=290
+failure_start_s=125
+failure_duration_s=40
+failure_end_s=165

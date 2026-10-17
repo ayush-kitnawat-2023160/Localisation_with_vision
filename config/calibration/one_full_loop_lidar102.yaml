@@ -1,0 +1,56 @@
+# one_full_loop.bag calibration for the requested /lidar102/velodyne_points.
+#
+# The historical ALIVE FAST-LIVO2 benchmark used lidar103 as its body/IMU
+# convention and the supplied front-camera calibration was expressed relative
+# to lidar103.  The old ALIVE TF tree contains the measured lidar103->lidar102
+# transform.  The FAST-LIVO2 fields below therefore use:
+#   p_lidar103 = R_103_102 * p_lidar102 + t_103_102
+#   p_camera   = R_cam103 * p_lidar103 + P_cam103
+# and Rcl/Pcl are the composed lidar102->camera transform.
+calibration:
+  ready: true
+  measurement_id: ALIVE_ONE_FULL_LOOP_2024_LIDAR102_COMPOSED_FROM_OLD_TF
+  base_frame: velodyne103
+  lidar_frame: velodyne102
+  camera_frame: camera_color_optical_frame
+  sensor_height_m: 1.5
+  fast_to_floam_time_offset_sec: 0.0
+  lidar_to_base_translation: [0.35655154, 0.27609187, -0.21136032]
+  lidar_to_base_rotation: [0.94591130, 0.11151924, 0.30465601,
+                           -0.17690601, 0.96446917, 0.19622306,
+                           -0.27194868, -0.23950508, 0.93203071]
+  lidar_to_imu_translation: [0.35655154, 0.27609187, -0.21136032]
+  lidar_to_imu_rotation: [0.94591130, 0.11151924, 0.30465601,
+                          -0.17690601, 0.96446917, 0.19622306,
+                          -0.27194868, -0.23950508, 0.93203071]
+
+extrin_calib:
+  extrinsic_T: [0.35655154, 0.27609187, -0.21136032]
+  extrinsic_R: [0.94591130, 0.11151924, 0.30465601,
+                -0.17690601, 0.96446917, 0.19622306,
+                -0.27194868, -0.23950508, 0.93203071]
+  Pcl: [-0.25928808, -0.28736355, -0.03563665]
+  Rcl: [0.00558068, -0.96464917, -0.26347832,
+        0.37614022, 0.24615735, -0.89326654,
+        0.92654595, -0.09411975, 0.36421707]
+
+time_offset:
+  imu_time_offset: 0.0
+  lidar_time_offset: 0.0
+  img_time_offset: 0.0
+  exposure_time_init: 0.0
+
+laserMapping:
+  cam_model: Pinhole
+  cam_width: 1280
+  cam_height: 720
+  scale: 1.0
+  cam_fx: 668.02585977
+  cam_fy: 658.80930843
+  cam_cx: 657.26752359
+  cam_cy: 363.16409155
+  cam_d0: -0.05078581
+  cam_d1: 0.08456123
+  cam_d2: -0.00046157
+  cam_d3: 0.00656211
+  cam_d4: -0.03406049

@@ -1,0 +1,51 @@
+<launch>
+  <!-- No FLOAM, PCD map, NDT, ICP, or scan-to-map localization is launched. -->
+  <arg name="use_sim_time" default="true"/>
+  <arg name="rviz" default="false"/>
+  <arg name="lanelet_map_file" default="$(find fast_livo2)/maps/full_campus_lanelet.osm"/>
+  <arg name="lidar_topic" default="/lidar103/velodyne_points"/>
+  <arg name="imu_topic" default="/mavros/imu/data"/>
+  <arg name="camera_topic" default="/camera/color/image_raw"/>
+  <arg name="gps_topic" default="/mavros/global_position/global"/>
+  <arg name="camera_timestamp_mode" default="rebase"/>
+  <!-- Visualization-only map.  This publishes the checked-in PCD; it is not
+       used for registration or localization. -->
+  <arg name="pcd_map" default="true"/>
+  <arg name="pcd_map_file" default="$(find fast_livo2)/maps/full_campus.pcd"/>
+  <arg name="pcd_map_topic" default="/apriori_map"/>
+
+  <include file="$(find fast_livo2)/launch/fast_livo2_velodyne.launch">
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+    <arg name="rviz" value="false"/>
+    <arg name="publish_compatibility" value="false"/>
+    <!-- Expose the measured base_link->velodyne transform so RViz can show
+         the raw 10 Hz LiDAR stream as well as FAST-LIVO2's registered cloud. -->
+    <arg name="publish_lidar_tf" value="true"/>
+    <arg name="native_tf_topic" value="/fast_livo2/native_tf"/>
+    <arg name="camera_timestamp_mode" value="$(arg camera_timestamp_mode)"/>
+    <arg name="config_file" value="$(find fast_livo2)/config/laptop_rosbag.yaml"/>
+    <arg name="calibration_file" value="$(find fast_livo2)/config/calibration/recorded_cart_bag.yaml"/>
+    <arg name="lidar_topic" value="$(arg lidar_topic)"/>
+    <arg name="imu_topic" value="$(arg imu_topic)"/>
+    <arg name="camera_topic" value="$(arg camera_topic)"/>
+  </include>
+
+  <!-- Keep upstream camera_init->aft_mapped out of the public TF tree. The
+       bridge publishes the required fastlivo_odom->base_link equivalent. -->
+  <node pkg="fast_livo2" type="fast_livo2_lanelet_bridge.py"
+        name="fast_livo2_lanelet_bridge" output="screen" required="true">
+    <rosparam command="load" file="$(find fast_livo2)/config/lanelet_bridge.yaml"/>
+    <param name="lanelet_map_file" value="$(arg lanelet_map_file)"/>
+    <param name="gps_topic" value="$(arg gps_topic)"/>
+    <param name="native_odom_topic" value="/aft_mapped_to_init"/>
+  </node>
+
+  <node if="$(arg pcd_map)" pkg="pcl_ros" type="pcd_to_pointcloud"
+        name="pcd_map_visualization" args="$(arg pcd_map_file) 1.0" output="screen">
+    <param name="frame_id" value="map"/>
+    <remap from="cloud_pcd" to="$(arg pcd_map_topic)"/>
+  </node>
+
+  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="fast_livo2_lanelet_rviz"
+        args="-d $(find fast_livo2)/rviz/fast_livo2_lanelet_localization.rviz" output="screen"/>
+</launch>

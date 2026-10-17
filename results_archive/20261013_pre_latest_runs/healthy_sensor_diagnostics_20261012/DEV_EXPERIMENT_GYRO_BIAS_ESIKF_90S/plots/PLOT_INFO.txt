@@ -1,0 +1,10 @@
+run=DEV_EXPERIMENT_GYRO_BIAS_ESIKF_90S
+sensor=none
+timeline_origin=first_same_bag_reference_scan
+reference_is_validated_gt=false
+failure_start_s=NA
+failure_end_s=NA
+global_samples=858
+gicp_fixes=88
+max_global_step_m=1.147843
+end_reference_disagreement_m=0.568601

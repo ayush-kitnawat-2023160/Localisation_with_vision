@@ -1,0 +1,89 @@
+# FAST-LIVO2 estimator tuning for the supplied full camera/LiDAR/IMU bag.
+# Sensor geometry/timing comes from calibration/recorded_cart_bag.yaml.
+# The launch file loads this file, then overrides the three common topic names
+# to the adapter outputs. The adapter scales Velodyne point time to the units
+# expected by the upstream Velodyne preprocessor.
+
+common:
+  lid_topic: /fast_livo2/input/lidar
+  imu_topic: /fast_livo2/input/imu
+  img_topic: /fast_livo2/input/image
+  time_sync_en: false
+  img_en: 1
+  lidar_en: 1
+  ros_driver_bug_fix: false
+
+preprocess:
+  lidar_type: 2
+  scan_line: 16
+  point_filter_num: 2
+  filter_size_surf: 0.1
+  blind: 0.5
+  feature_extract_enabled: false
+
+imu:
+  imu_en: true
+  imu_int_frame: 30
+  gravity_est_en: true
+  ba_bg_est_en: true
+  acc_cov: 0.5
+  gyr_cov: 0.3
+  b_acc_cov: 0.0001
+  b_gyr_cov: 0.0001
+
+vio:
+  max_iterations: 5
+  outlier_threshold: 1000
+  img_point_cov: 1000
+  patch_size: 8
+  patch_pyrimid_level: 4
+  normal_en: true
+  raycast_en: false
+  inverse_composition_en: false
+  exposure_estimate_en: true
+  inv_expo_cov: 0.1
+  grid_size: 5
+  visual_map_radius: 60.0
+  # Baseline upstream behavior while odometry/localization is being validated.
+  visual_map_prune_every_n: 0
+
+lio:
+  max_iterations: 5
+  dept_err: 0.02
+  beam_err: 0.05
+  min_eigen_value: 0.005
+  voxel_size: 1.0
+  max_layer: 2
+  max_points_num: 50
+  layer_init_num: [5, 5, 5, 5, 5]
+
+local_map:
+  map_sliding_en: false
+  half_map_size: 80
+  sliding_thresh: 8
+
+uav:
+  imu_rate_odom: false
+  gravity_align_en: false
+
+publish:
+  dense_map_en: false
+  pub_effect_point_en: false
+  pub_plane_en: false
+  pub_scan_num: 1
+  blind_rgb_points: 0.0
+
+evo:
+  seq_name: camera_lidar_imu_gps
+  pose_output_en: false
+
+pcd_save:
+  pcd_save_en: false
+  type: 0
+  colmap_output_en: false
+  filter_size_pcd: 0.15
+  interval: -1
+
+image_save:
+  img_save_en: false
+  interval: 1

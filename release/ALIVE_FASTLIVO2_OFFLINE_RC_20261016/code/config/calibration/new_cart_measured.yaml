@@ -1,0 +1,56 @@
+# NEW CART CALIBRATION TEMPLATE -- intentionally locked.
+#
+# Replace every placeholder from physical measurements, give measurement_id a
+# traceable calibration-run name, then set calibration/ready to true. The
+# required calibration guard prevents localization while this file is locked.
+# Transform convention: p_parent = R * p_lidar + T.
+calibration:
+  ready: false
+  measurement_id: REPLACE_ME_WITH_PHYSICAL_CALIBRATION_RUN_ID
+  base_frame: base_link
+  lidar_frame: velodyne
+  camera_frame: camera_color_optical_frame
+  sensor_height_m: 0.0
+  fast_to_floam_time_offset_sec: 0.0
+  lidar_to_base_translation: [0.0, 0.0, 0.0]
+  lidar_to_base_rotation: [1.0, 0.0, 0.0,
+                           0.0, 1.0, 0.0,
+                           0.0, 0.0, 1.0]
+  lidar_to_imu_translation: [0.0, 0.0, 0.0]
+  lidar_to_imu_rotation: [1.0, 0.0, 0.0,
+                          0.0, 1.0, 0.0,
+                          0.0, 0.0, 1.0]
+
+# FAST-LIVO2 consumes these values directly. They must match the measured
+# calibration/lidar_to_imu values above; the guard verifies that equality.
+extrin_calib:
+  extrinsic_T: [0.0, 0.0, 0.0]
+  extrinsic_R: [1.0, 0.0, 0.0,
+                0.0, 1.0, 0.0,
+                0.0, 0.0, 1.0]
+  Pcl: [0.0, 0.0, 0.0]
+  Rcl: [1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0]
+
+time_offset:
+  imu_time_offset: 0.0
+  lidar_time_offset: 0.0
+  img_time_offset: 0.0
+  exposure_time_init: 0.0
+
+# Replace from the live camera's CameraInfo message and camera calibration.
+laserMapping:
+  cam_model: Pinhole
+  cam_width: 0
+  cam_height: 0
+  scale: 1.0
+  cam_fx: 0.0
+  cam_fy: 0.0
+  cam_cx: 0.0
+  cam_cy: 0.0
+  cam_d0: 0.0
+  cam_d1: 0.0
+  cam_d2: 0.0
+  cam_d3: 0.0
+  cam_d4: 0.0

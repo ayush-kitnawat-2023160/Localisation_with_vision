@@ -1,0 +1,10 @@
+run=DEV_20261010_LIDAR_MAPRESIDUAL_290S
+sensor=lidar
+timeline_origin=first_same_bag_reference_scan
+reference_is_validated_gt=false
+failure_start_s=125.0
+failure_end_s=165.0
+global_samples=2412
+gicp_fixes=207
+max_global_step_m=2.063524
+end_reference_disagreement_m=0.627731

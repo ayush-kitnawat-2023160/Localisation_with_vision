@@ -1,0 +1,22 @@
+<launch>
+  <arg name="use_sim_time" default="true"/>
+  <arg name="rviz" default="false"/>
+  <arg name="camera_timestamp_mode" default="rebase"/>
+  <arg name="config_file" default="$(find fast_livo2)/config/laptop_rosbag.yaml"/>
+  <arg name="calibration_file" default="$(find fast_livo2)/config/calibration/recorded_cart_bag.yaml"/>
+
+  <arg name="lidar_topic" default="/lidar103/velodyne_points"/>
+  <arg name="imu_topic" default="/mavros/imu/data"/>
+  <arg name="camera_topic" default="/camera/color/image_raw"/>
+
+  <include file="$(find fast_livo2)/launch/fast_livo2_velodyne.launch">
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+    <arg name="rviz" value="$(arg rviz)"/>
+    <arg name="camera_timestamp_mode" value="$(arg camera_timestamp_mode)"/>
+    <arg name="config_file" value="$(arg config_file)"/>
+    <arg name="calibration_file" value="$(arg calibration_file)"/>
+    <arg name="lidar_topic" value="$(arg lidar_topic)"/>
+    <arg name="imu_topic" value="$(arg imu_topic)"/>
+    <arg name="camera_topic" value="$(arg camera_topic)"/>
+  </include>
+</launch>

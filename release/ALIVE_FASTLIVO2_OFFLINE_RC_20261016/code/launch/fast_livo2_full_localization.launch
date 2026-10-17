@@ -1,0 +1,33 @@
+<launch>
+  <!-- Main localization path: FAST-LIVO2 continuous odometry + PCD NDT/GICP
+       acquisition/verification. FLOAM is no longer part of this entry point. -->
+  <arg name="use_sim_time" default="false"/>
+  <arg name="rviz" default="true"/>
+  <arg name="camera_timestamp_mode" default="preserve"/>
+  <arg name="config_file" default="$(find fast_livo2)/config/nuc_realtime.yaml"/>
+  <arg name="calibration_file" default="$(find fast_livo2)/config/calibration/new_cart_measured.yaml"/>
+  <arg name="map_path" default="$(find fast_livo2)/maps/full_campus.pcd"/>
+  <arg name="lidar_topic" default="/lidar103/velodyne_points"/>
+  <arg name="imu_topic" default="/mavros/imu/data"/>
+  <arg name="camera_topic" default="/camera/color/image_raw"/>
+  <arg name="fast_local_odom_topic" default="/aft_mapped_to_init"/>
+  <arg name="initial_search_xy" default="5.0"/>
+  <arg name="initial_search_yaw" default="25.0"/>
+  <arg name="periodic_check_sec" default="3.0"/>
+
+  <include file="$(find fast_livo2)/launch/fast_livo2_pcd_localization.launch">
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+    <arg name="rviz" value="$(arg rviz)"/>
+    <arg name="camera_timestamp_mode" value="$(arg camera_timestamp_mode)"/>
+    <arg name="config_file" value="$(arg config_file)"/>
+    <arg name="calibration_file" value="$(arg calibration_file)"/>
+    <arg name="map_path" value="$(arg map_path)"/>
+    <arg name="lidar_topic" value="$(arg lidar_topic)"/>
+    <arg name="imu_topic" value="$(arg imu_topic)"/>
+    <arg name="camera_topic" value="$(arg camera_topic)"/>
+    <arg name="fast_odom_topic" value="$(arg fast_local_odom_topic)"/>
+    <arg name="initial_search_xy" value="$(arg initial_search_xy)"/>
+    <arg name="initial_search_yaw_deg" value="$(arg initial_search_yaw)"/>
+    <arg name="periodic_check_sec" value="$(arg periodic_check_sec)"/>
+  </include>
+</launch>

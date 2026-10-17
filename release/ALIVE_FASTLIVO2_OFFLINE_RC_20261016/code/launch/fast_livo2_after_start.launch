@@ -1,0 +1,62 @@
+<launch>
+  <!-- Paused LiDAR-to-PCD acquisition followed by native FAST-LIVO2 motion.
+       Keep faculty_loop.bag paused while the operator gives /initialpose.
+       PCD acquisition publishes the corrected map pose before playback is
+       resumed; FAST-LIVO2 then supplies continuous local motion. -->
+  <arg name="use_sim_time" default="true"/>
+  <arg name="rviz" default="false"/>
+  <arg name="publish_lidar_tf" default="true"/>
+  <arg name="camera_timestamp_mode" default="rebase"/>
+  <arg name="config_file" default="$(find fast_livo2)/config/laptop_rosbag.yaml"/>
+  <arg name="calibration_file" default="$(find fast_livo2)/config/calibration/recorded_cart_bag.yaml"/>
+  <arg name="map_path" default="$(find fast_livo2)/maps/full_campus.pcd"/>
+  <arg name="lidar_topic" default="/lidar103/velodyne_points"/>
+  <arg name="imu_topic" default="/mavros/imu/data"/>
+  <arg name="camera_topic" default="/camera/color/image_raw"/>
+  <arg name="initial_search_xy" default="5.0"/>
+  <arg name="initial_search_yaw" default="30.0"/>
+
+  <include file="$(find fast_livo2)/launch/fast_livo2_velodyne.launch">
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+    <arg name="rviz" value="false"/>
+    <arg name="publish_compatibility" value="false"/>
+    <arg name="publish_lidar_tf" value="$(arg publish_lidar_tf)"/>
+    <arg name="camera_timestamp_mode" value="$(arg camera_timestamp_mode)"/>
+    <arg name="config_file" value="$(arg config_file)"/>
+    <arg name="calibration_file" value="$(arg calibration_file)"/>
+    <arg name="lidar_topic" value="$(arg lidar_topic)"/>
+    <arg name="imu_topic" value="$(arg imu_topic)"/>
+    <arg name="camera_topic" value="$(arg camera_topic)"/>
+  </include>
+
+  <param name="use_sim_time" type="bool" value="$(arg use_sim_time)"/>
+  <param name="relocalization" type="bool" value="false"/>
+  <param name="map_frame" type="str" value="map"/>
+  <param name="base_frame" type="str" value="base_link"/>
+  <param name="floam_remove_vehicle_footprint" type="bool" value="true"/>
+  <param name="vehicle_length" type="double" value="3.590"/>
+  <param name="vehicle_width" type="double" value="2.2"/>
+  <param name="floam_vehicle_crop_min_z" type="double" value="-1.5"/>
+  <param name="floam_vehicle_crop_max_z" type="double" value="10.0"/>
+  <param name="floam_vehicle_crop_pitch_rad" type="double" value="-0.35"/>
+  <node pkg="fast_livo2" type="fast_livo2_pcd_localizer"
+        name="fast_livo2_pcd_localizer" output="screen" required="true">
+    <param name="map_path" value="$(arg map_path)"/>
+    <param name="lidar_topic" value="$(arg lidar_topic)"/>
+    <param name="fast_odom_topic" value="/aft_mapped_to_init"/>
+    <param name="map_frame" value="map"/>
+    <param name="base_frame" value="base_link"/>
+    <param name="initial_search_xy" value="$(arg initial_search_xy)"/>
+    <param name="initial_search_yaw_deg" value="$(arg initial_search_yaw)"/>
+    <param name="initial_grid_xy_step" value="5.0"/>
+    <param name="initial_grid_yaw_step_deg" value="15.0"/>
+    <param name="coarse_candidates" value="4"/>
+    <param name="refine_candidates" value="2"/>
+    <param name="ndt_iterations" value="18"/>
+    <param name="gicp_iterations" value="25"/>
+    <param name="local_map_radius" value="40.0"/>
+    <param name="source_leaf" value="0.35"/>
+    <param name="coarse_leaf" value="1.0"/>
+    <param name="map_leaf" value="0.50"/>
+  </node>
+</launch>

@@ -1,0 +1,149 @@
+{
+  "date": "2026-10-16",
+  "status": "ALL_NEW_GICP_SEED_CAPS_REJECTED_FOR_PROMOTION",
+  "same_bag_proxy_not_independent_ground_truth": true,
+  "the_two_bags_are_not_an_apples_to_apples_control_for_prior_image_version": true,
+  "training_or_fitting_done_on_sep18": false,
+  "selected_best_runs_remain_unchanged": true,
+  "deployable": false,
+  "results": {
+    "main_035": {
+      "development_only": true,
+      "independent_ground_truth": false,
+      "replay_horizon_s": 185.0,
+      "old": {
+        "poses": 1613,
+        "elapsed_s": 184.99,
+        "full_proxy_rmse_m": 1.504,
+        "pre_outage_60_to_90_rmse_m": 0.751,
+        "outage_proxy_rmse_m": 2.17,
+        "recovery_proxy_rmse_m": 1.317,
+        "max_published_pose_step_m": 2.276,
+        "max_pose_stream_gap_s": 0.201,
+        "large_steps_0p85m": 83,
+        "max_reference_difference_m": 4.154,
+        "untrusted_log_events": 0,
+        "no_verified_depth_recovery_refusals": 0,
+        "queued_lidar_rejections": 0
+      },
+      "new": {
+        "poses": 1613,
+        "elapsed_s": 184.99,
+        "full_proxy_rmse_m": 1.341,
+        "pre_outage_60_to_90_rmse_m": 0.718,
+        "outage_proxy_rmse_m": 1.928,
+        "recovery_proxy_rmse_m": 1.491,
+        "max_published_pose_step_m": 2.055,
+        "max_pose_stream_gap_s": 0.201,
+        "large_steps_0p85m": 80,
+        "max_reference_difference_m": 3.258,
+        "untrusted_log_events": 0,
+        "no_verified_depth_recovery_refusals": 0,
+        "queued_lidar_rejections": 0
+      },
+      "strict_quality_gate_passed": false,
+      "deployment_approved": false,
+      "note": "A trust Bool is not connected to the live planner/DBW; offline pass alone cannot approve cart deployment.",
+      "motion_diagnostics": {
+        "p95_speed_mps": 6.172,
+        "max_speed_mps": 11.88,
+        "pose_steps_over_0p85m": 80,
+        "speed_samples_over_6mps": 90,
+        "status": "offline_only_not_connected_to_live_planner_or_dbw"
+      },
+      "run_directory": "step3_global/depth_bounded_seed_trial_20261016/DEPTH_SEED_BOUNDED_0P35_190S"
+    },
+    "main_015": {
+      "development_only": true,
+      "independent_ground_truth": false,
+      "replay_horizon_s": 185.0,
+      "old": {
+        "poses": 1613,
+        "elapsed_s": 184.99,
+        "full_proxy_rmse_m": 1.504,
+        "pre_outage_60_to_90_rmse_m": 0.751,
+        "outage_proxy_rmse_m": 2.17,
+        "recovery_proxy_rmse_m": 1.317,
+        "max_published_pose_step_m": 2.276,
+        "max_pose_stream_gap_s": 0.201,
+        "large_steps_0p85m": 83,
+        "max_reference_difference_m": 4.154,
+        "untrusted_log_events": 0,
+        "no_verified_depth_recovery_refusals": 0,
+        "queued_lidar_rejections": 0
+      },
+      "new": {
+        "poses": 1613,
+        "elapsed_s": 184.99,
+        "full_proxy_rmse_m": 1.494,
+        "pre_outage_60_to_90_rmse_m": 0.767,
+        "outage_proxy_rmse_m": 2.599,
+        "recovery_proxy_rmse_m": 1.639,
+        "max_published_pose_step_m": 2.408,
+        "max_pose_stream_gap_s": 0.201,
+        "large_steps_0p85m": 63,
+        "max_reference_difference_m": 4.726,
+        "untrusted_log_events": 0,
+        "no_verified_depth_recovery_refusals": 0,
+        "queued_lidar_rejections": 0
+      },
+      "strict_quality_gate_passed": false,
+      "deployment_approved": false,
+      "note": "A trust Bool is not connected to the live planner/DBW; offline pass alone cannot approve cart deployment.",
+      "motion_diagnostics": {
+        "p95_speed_mps": 6.315,
+        "max_speed_mps": 12.024,
+        "pose_steps_over_0p85m": 63,
+        "speed_samples_over_6mps": 104,
+        "status": "offline_only_not_connected_to_live_planner_or_dbw"
+      },
+      "run_directory": "step3_global/depth_bounded_seed_trial_20261016/DEPTH_SEED_BOUNDED_0P15_190S"
+    },
+    "holdout_035": {
+      "development_only": true,
+      "independent_ground_truth": false,
+      "replay_horizon_s": 210.0,
+      "old": {
+        "poses": 1821,
+        "elapsed_s": 209.99,
+        "full_proxy_rmse_m": 1.565,
+        "pre_outage_60_to_90_rmse_m": 0.312,
+        "outage_proxy_rmse_m": 3.67,
+        "recovery_proxy_rmse_m": 1.863,
+        "max_published_pose_step_m": 1.385,
+        "max_pose_stream_gap_s": 0.403,
+        "large_steps_0p85m": 8,
+        "max_reference_difference_m": 6.161,
+        "untrusted_log_events": 0,
+        "no_verified_depth_recovery_refusals": 0,
+        "queued_lidar_rejections": 0
+      },
+      "new": {
+        "poses": 1822,
+        "elapsed_s": 209.99,
+        "full_proxy_rmse_m": 1.568,
+        "pre_outage_60_to_90_rmse_m": 0.334,
+        "outage_proxy_rmse_m": 3.885,
+        "recovery_proxy_rmse_m": 1.425,
+        "max_published_pose_step_m": 1.713,
+        "max_pose_stream_gap_s": 0.504,
+        "large_steps_0p85m": 14,
+        "max_reference_difference_m": 5.916,
+        "untrusted_log_events": 0,
+        "no_verified_depth_recovery_refusals": 0,
+        "queued_lidar_rejections": 0
+      },
+      "strict_quality_gate_passed": false,
+      "deployment_approved": false,
+      "note": "A trust Bool is not connected to the live planner/DBW; offline pass alone cannot approve cart deployment.",
+      "motion_diagnostics": {
+        "p95_speed_mps": 3.641,
+        "max_speed_mps": 7.526,
+        "pose_steps_over_0p85m": 14,
+        "speed_samples_over_6mps": 13,
+        "status": "offline_only_not_connected_to_live_planner_or_dbw"
+      },
+      "run_directory": "step3_global/depth_bounded_seed_trial_20261016/HELDOUT_18SEP_DEPTH_SEED_0P35_220S"
+    }
+  }
+}

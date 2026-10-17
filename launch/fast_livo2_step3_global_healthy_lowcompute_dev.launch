@@ -1,0 +1,220 @@
+<launch>
+  <arg name="config_file" default="$(find fast_livo2)/config/failsafe_rosbag.yaml"/>
+  <arg name="calibration_file" default="$(find fast_livo2)/config/calibration/recorded_cart_bag.yaml"/>
+  <arg name="lidar_topic" default="/lidar103/velodyne_points"/>
+  <arg name="imu_topic" default="/mavros/imu/data"/>
+  <arg name="camera_topic" default="/camera/color/image_raw"/>
+  <arg name="depth_topic" default="/camera/depth/image_rect_raw"/>
+  <arg name="map_db" default="/map_db"/>
+  <arg name="visual_voxel_map" default="/visual_map.pcd"/>
+  <arg name="visual_place_enable" default="false"/>
+  <arg name="lidar_fail_feature_pnp_enable" default="false"/>
+  <arg name="lidar_fail_feature_akaze_enable" default="false"/>
+  <arg name="tracking_esikf_measurement_enable" default="false"/>
+  <arg name="tracking_gyro_bias_feedback_enable" default="false"/>
+  <arg name="tracking_anchored_local_feedback_enable" default="false"/>
+  <arg name="tracking_deferred_scan_enable" default="false"/>
+  <arg name="tracking_continuity_retry_enable" default="true"/>
+  <arg name="visual_map_image_dir" default="/visual_map_images"/>
+  <arg name="visual_map_trajectory" default="/visual_map_trajectory.csv"/>
+  <arg name="trajectory_output" default="/results/trajectory.csv"/>
+  <arg name="drop_sensor" default="none"/>
+  <arg name="drop_start" default="15.0"/>
+  <arg name="drop_duration" default="20.0"/>
+  <arg name="depth_anchor_translation_gain" default="1.00"/>
+  <arg name="depth_anchor_max_xy_step" default="1.50"/>
+  <arg name="depth_anchor_max_z_step" default="0.35"/>
+  <param name="step3/gyro_bias_feedback_enable" value="$(arg tracking_gyro_bias_feedback_enable)"/>
+  <param name="step3/anchored_local_feedback_enable" value="$(arg tracking_anchored_local_feedback_enable)"/>
+
+  <!-- Frozen Step-2 estimator remains the motion authority. Old periodic map
+       correction/localizer nodes are disabled; Step-3 supplies only verified
+       global map<-FAST tracking. -->
+  <include file="$(find fast_livo2)/launch/fast_livo2_failsafe_rosbag.launch">
+    <arg name="config_file" value="$(arg config_file)"/>
+    <arg name="calibration_file" value="$(arg calibration_file)"/>
+    <arg name="lidar_topic" value="$(arg lidar_topic)"/>
+    <arg name="imu_topic" value="$(arg imu_topic)"/>
+    <arg name="camera_topic" value="$(arg camera_topic)"/>
+    <arg name="depth_topic" value="$(arg depth_topic)"/>
+    <arg name="mapper_launch_prefix" value="taskset -c 2-7"/>
+    <arg name="map_localizer_launch_prefix" value="taskset -c 10-11 nice -n 10"/>
+    <arg name="failsafe_frontend_launch_prefix" value="taskset -c 10-11 nice -n 8"/>
+    <arg name="rgbd_frontend_launch_prefix" value="taskset -c 8-9"/>
+    <arg name="map_localizer_enable" value="true"/>
+    <arg name="visual_place_enable" value="$(arg visual_place_enable)"/>
+    <arg name="visual_map_image_dir" value="$(arg visual_map_image_dir)"/>
+    <arg name="visual_map_trajectory" value="$(arg visual_map_trajectory)"/>
+    <arg name="visual_place_enable_on_healthy" value="false"/>
+    <arg name="visual_place_lidar_fail_query_hz" value="1.0"/>
+    <arg name="visual_place_lidar_fail_pool_size" value="128"/>
+    <arg name="visual_place_lidar_fail_feature_pnp" value="$(arg lidar_fail_feature_pnp_enable)"/>
+    <arg name="visual_place_lidar_fail_akaze" value="$(arg lidar_fail_feature_akaze_enable)"/>
+    <arg name="visual_place_launch_prefix" value="taskset -c 10-11 nice -n 12"/>
+    <arg name="depth_failover_only" value="true"/>
+    <arg name="map_initial_pose_topic" value="/fast_livo2/step3_failover_initialpose"/>
+    <arg name="map_path" value="$(arg visual_voxel_map)"/>
+    <arg name="visual_voxel_map_path" value="$(arg visual_voxel_map)"/>
+    <arg name="failsafe_frontends_enable" value="true"/>
+    <arg name="map_primary_on_imu_failure" value="false"/>
+    <arg name="map_primary_on_lidar_failure" value="false"/>
+    <arg name="trajectory_output" value="$(arg trajectory_output)"/>
+    <arg name="drop_sensor" value="$(arg drop_sensor)"/>
+    <arg name="drop_start" value="$(arg drop_start)"/>
+    <arg name="drop_duration" value="$(arg drop_duration)"/>
+  </include>
+
+  <node pkg="fast_livo2" type="step3_global_acquirer"
+        name="step3_global_acquirer" output="screen" launch-prefix="taskset -c 0-1 nice -n 10">
+    <param name="map_db" value="$(arg map_db)"/>
+    <param name="lidar_topic" value="/fast_livo2/input/lidar"/>
+    <param name="fast_odom_topic" value="/aft_mapped_to_init"/>
+    <param name="query_hz" value="2.0"/>
+    <param name="source_voxel" value="0.35"/>
+    <param name="descriptor_candidates" value="12"/>
+    <param name="geometric_candidates" value="1"/>
+    <param name="gicp_max_fitness" value="0.12"/>
+    <param name="tracking_hz" value="1.0"/>
+    <param name="tracking_candidates" value="3"/>
+    <!-- 12 nearby submaps ~7MB; bounded LRU prevents PCD disk churn. -->
+    <param name="tracking_submap_cache_slots" value="12"/>
+    <param name="tracking_gicp_max_iterations" value="20"/>
+    <param name="tracking_deferred_scan_enable" value="$(arg tracking_deferred_scan_enable)"/>
+    <param name="tracking_deferred_scan_max_age_sec" value="3.0"/>
+    <param name="tracking_continuity_retry_enable" value="$(arg tracking_continuity_retry_enable)"/>
+    <param name="tracking_continuity_retry_max_age_sec" value="10.0"/>
+    <!-- Map keyframe ID is not a metric distance; retain physical GICP gates. -->
+    <param name="tracking_continuity_retry_physical_only_enable" value="true"/>
+    <param name="tracking_id_free_window" value="8.0"/>
+    <param name="tracking_id_window_per_sec" value="2.5"/>
+    <!-- Physical proximity + heading, not arbitrary storage ID ordering. -->
+    <param name="tracking_id_penalty_m_per_keyframe" value="0.0"/>
+    <param name="tracking_max_fitness" value="0.20"/>
+    <param name="tracking_max_translation_innovation" value="6.0"/>
+    <param name="tracking_max_yaw_innovation_deg" value="10.0"/>
+    <!-- Do not convert a wrong road/submap match into an overspeed correction. -->
+    <param name="tracking_healthy_motion_consistency_gate" value="true"/>
+    <param name="tracking_healthy_motion_consistency_slack_m" value="0.45"/>
+    <param name="tracking_healthy_motion_consistency_rate_mps" value="0.65"/>
+    <!-- Strong, low-residual geometry overrides weak odometry-distance evidence. -->
+    <param name="tracking_healthy_motion_consistency_strong_fitness" value="0.10"/>
+    <param name="tracking_healthy_motion_consistency_max_gap_sec" value="5.0"/>
+    <param name="tracking_relaxed_yaw_max_deg" value="18.0"/>
+    <param name="tracking_relaxed_yaw_max_fitness" value="0.14"/>
+    <param name="tracking_relaxed_yaw_max_translation" value="2.5"/>
+    <param name="tracking_route_continuous_max_fitness" value="0.28"/>
+    <param name="tracking_route_continuous_max_translation" value="4.0"/>
+    <param name="tracking_route_continuous_max_yaw_deg" value="14.0"/>
+    <!-- Route-local SC+GICP is the first response to a missed normal match.
+         Keep the experimental open-loop map-motion extrapolator dormant; it
+         can be wrong when the vehicle accelerates sharply between map fixes. -->
+    <param name="tracking_gap_predict_after_sec" value="999.0"/>
+    <param name="tracking_gap_predict_blend_sec" value="0.50"/>
+    <param name="tracking_gap_predict_max_sec" value="6.0"/>
+    <param name="tracking_gap_predict_max_speed_mps" value="8.0"/>
+    <param name="tracking_gap_predict_max_yaw_rate_deg_s" value="55.0"/>
+    <param name="tracking_gap_predict_velocity_alpha" value="0.65"/>
+    <param name="tracking_reacquire_after_sec" value="3.0"/>
+    <param name="tracking_reacquire_max_fitness" value="0.18"/>
+    <param name="tracking_reacquire_max_translation_innovation" value="12.0"/>
+    <param name="tracking_reacquire_max_yaw_innovation_deg" value="20.0"/>
+    <param name="tracking_route_reacquire_id_band" value="18"/>
+    <param name="tracking_route_reacquire_id_rate" value="4.0"/>
+    <param name="tracking_route_reacquire_descriptor_threshold" value="0.45"/>
+    <param name="tracking_route_reacquire_geometric_candidates" value="1"/>
+    <param name="tracking_route_reacquire_max_fitness" value="0.22"/>
+    <param name="tracking_route_reacquire_max_speed_mps" value="12.0"/>
+    <param name="tracking_route_reacquire_max_yaw_rate_deg_s" value="60.0"/>
+    <param name="tracking_route_reacquire_enabled" value="true"/>
+    <param name="tracking_update_anchor" value="true"/>
+    <param name="tracking_anchor_translation_gain" value="1.0"/>
+    <param name="tracking_anchor_max_xy_step" value="0.8"/>
+    <param name="tracking_anchor_max_z_step" value="0.15"/>
+    <param name="tracking_anchor_yaw_gain" value="0.75"/>
+    <param name="tracking_anchor_max_yaw_step_deg" value="1.5"/>
+    <param name="tracking_global_reacquire_after_sec" value="10.0"/>
+    <param name="tracking_global_reacquire_after_misses" value="12"/>
+    <param name="tracking_global_reacquire_unrestricted_after_sec" value="30.0"/>
+    <param name="tracking_global_reacquire_physical_gate" value="true"/>
+    <param name="tracking_global_reacquire_position_slack_m" value="3.0"/>
+    <param name="tracking_global_reacquire_vertical_slack_m" value="3.0"/>
+    <param name="tracking_global_reacquire_predicted_pose_weight" value="0.001"/>
+    <param name="tracking_global_reacquire_hz" value="1.0"/>
+    <param name="tracking_global_reacquire_descriptor_candidates" value="20"/>
+    <param name="tracking_global_reacquire_descriptor_threshold" value="0.38"/>
+    <param name="tracking_global_reacquire_geometric_candidates" value="4"/>
+    <param name="tracking_global_reacquire_max_fitness" value="0.14"/>
+    <param name="tracking_global_reacquire_required_consistent" value="2"/>
+    <param name="tracking_global_reacquire_consistency_translation" value="3.0"/>
+    <param name="tracking_global_reacquire_consistency_yaw_deg" value="12.0"/>
+    <param name="tracking_global_reacquire_max_speed_mps" value="10.0"/>
+    <param name="tracking_global_reacquire_max_yaw_rate_deg_s" value="45.0"/>
+    <param name="tracking_global_reacquire_max_id_rate" value="6.0"/>
+    <param name="tracking_global_reacquire_hard_reset_translation" value="15.0"/>
+    <param name="tracking_global_reacquire_ramp_sec" value="3.0"/>
+    <param name="fast_local_max_speed_mps" value="15.0"/>
+    <param name="fast_local_max_vertical_speed_mps" value="6.0"/>
+    <param name="fast_local_max_pose_gap_sec" value="1.0"/>
+    <param name="fast_local_recover_samples" value="30"/>
+    <param name="map_fix_fallback_follow_tau_sec" value="0.15"/>
+    <param name="map_fix_fallback_max_extrapolation_sec" value="1.2"/>
+    <param name="map_fix_fallback_max_speed_mps" value="12.0"/>
+    <param name="map_fix_fallback_max_yaw_rate_deg_s" value="90.0"/>
+    <param name="map_fix_fallback_publish_hz" value="20.0"/>
+    <param name="map_fix_fallback_catchup_speed_mps" value="16.0"/>
+    <param name="map_fix_fallback_max_publish_step_m" value="0.50"/>
+    <param name="tracking_correction_ramp_sec" value="0.5"/>
+    <param name="tracking_reacquire_correction_ramp_sec" value="2.0"/>
+    <param name="tracking_reacquire_anchor_max_xy_correction" value="2.5"/>
+    <param name="tracking_correction_deadband_xy_m" value="0.0"/>
+    <param name="tracking_correction_deadband_z_m" value="0.0"/>
+    <param name="tracking_correction_deadband_yaw_deg" value="0.0"/>
+    <param name="tracking_correction_filter_alpha" value="1.0"/>
+    <param name="tracking_reacquire_correction_filter_alpha" value="1.0"/>
+    <param name="tracking_publish_smoothing_min_sec" value="0.25"/>
+    <param name="tracking_publish_smoothing_max_sec" value="1.50"/>
+    <param name="tracking_route_reacquire_publish_max_sec" value="0.65"/>
+    <param name="tracking_publish_max_correction_speed_mps" value="6.0"/>
+    <param name="tracking_publish_relative_motion_limit_enable" value="true"/>
+    <!-- Healthy only: bounded velocity observer instead of stacked pose corrections. -->
+    <param name="tracking_publish_healthy_observer_enable" value="true"/>
+    <param name="tracking_publish_healthy_correction_only_enable" value="true"/>
+    <!-- Experimental healthy recovery after a 2+s PCD tracking gap: preserve
+         raw FAST motion and gradually allow lateral and yaw map corrections. -->
+    <param name="tracking_healthy_gap_handoff_enable" value="true"/>
+    <param name="tracking_healthy_gap_handoff_trigger_gap_sec" value="1.80"/>
+    <param name="tracking_healthy_gap_handoff_trigger_residual_m" value="1.20"/>
+    <param name="tracking_healthy_gap_handoff_trigger_yaw_deg" value="8.0"/>
+    <param name="tracking_healthy_gap_handoff_duration_sec" value="4.0"/>
+    <param name="tracking_healthy_gap_handoff_lateral_speed_mps" value="0.35"/>
+    <param name="tracking_healthy_gap_handoff_yaw_rate_deg_s" value="9.0"/>
+    <param name="tracking_healthy_gap_handoff_max_odom_dt_sec" value="0.90"/>
+
+    <param name="tracking_publish_healthy_observer_map_velocity_weight" value="0.0"/>
+    <param name="tracking_publish_healthy_observer_position_gain" value="2.0"/>
+    <param name="tracking_publish_healthy_observer_accel_limit" value="8.0"/>
+    <param name="tracking_publish_healthy_observer_speed_limit" value="4.0"/>
+    <param name="tracking_publish_healthy_observer_yaw_rate_limit_deg_s" value="35.0"/>
+    <param name="tracking_publish_relative_correction_speed_mps" value="6.0"/>
+    <param name="tracking_publish_relative_yaw_rate_deg_s" value="35.0"/>
+    <param name="tracking_publish_relative_turn_sensitive_enable" value="true"/>
+    <param name="tracking_publish_relative_turn_rate_threshold_deg_s" value="7.0"/>
+    <param name="tracking_publish_relative_turn_hold_sec" value="8.0"/>
+    <param name="tracking_publish_relative_turn_correction_speed_mps" value="1.5"/>
+    <param name="tracking_publish_relative_turn_yaw_correction_deg_s" value="12.0"/>
+    <param name="tracking_publish_max_yaw_correction_deg_s" value="35.0"/>
+    <param name="tracking_publish_esikf_residual" value="$(arg tracking_esikf_measurement_enable)"/>
+    <param name="tracking_publish_gyro_bias_measurement" value="$(arg tracking_gyro_bias_feedback_enable)"/>
+    <param name="tracking_publish_anchored_local_measurement" value="$(arg tracking_anchored_local_feedback_enable)"/>
+    <param name="depth_anchor_translation_gain" value="$(arg depth_anchor_translation_gain)"/>
+    <param name="depth_anchor_max_xy_step" value="$(arg depth_anchor_max_xy_step)"/>
+    <param name="depth_anchor_max_z_step" value="$(arg depth_anchor_max_z_step)"/>
+    <param name="depth_max_translation_innovation" value="4.0"/>
+    <param name="trajectory_yaw_fit_enable" value="true"/>
+    <param name="trajectory_yaw_fit_window_sec" value="12.0"/>
+    <param name="trajectory_yaw_fit_min_baseline_m" value="4.0"/>
+    <param name="trajectory_yaw_fit_min_pairs" value="4"/>
+    <param name="trajectory_yaw_fit_gain" value="0.65"/>
+    <param name="trajectory_yaw_fit_max_step_deg" value="1.5"/>
+  </node>
+</launch>

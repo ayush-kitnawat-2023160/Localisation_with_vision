@@ -1,0 +1,6 @@
+case=FINAL290_HEALTHY_BOUNDEDPLACE_20261006
+sensor=none
+play_duration_s=290
+failure_start_s=125
+failure_duration_s=40
+failure_end_s=165

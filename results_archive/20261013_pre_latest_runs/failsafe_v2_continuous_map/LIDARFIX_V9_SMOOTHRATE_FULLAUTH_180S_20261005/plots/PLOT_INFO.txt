@@ -1,0 +1,8 @@
+run=LIDARFIX_V9_SMOOTHRATE_FULLAUTH_180S_20261005
+sensor=lidar
+failure_start_s=125.0
+failure_end_s=165.0
+global_samples=1545
+gicp_fixes=126
+max_global_step_m=2.436193
+end_3d_error_m=0.554571

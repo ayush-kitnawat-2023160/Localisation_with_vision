@@ -1,0 +1,194 @@
+<launch>
+  <arg name="use_sim_time" default="true"/>
+  <arg name="config_file" default="$(find fast_livo2)/config/failsafe_rosbag.yaml"/>
+  <arg name="calibration_file" default="$(find fast_livo2)/config/calibration/one_full_loop_lidar102.yaml"/>
+  <arg name="lidar_topic" default="/lidar102/velodyne_points"/>
+  <arg name="imu_topic" default="/mavros/imu/data"/>
+  <arg name="camera_topic" default="/camera/color/image_raw"/>
+  <arg name="camera_timestamp_mode" default="rebase"/>
+  <arg name="max_camera_hz" default="5.0"/>
+  <arg name="depth_topic" default="/camera/depth/image_rect_raw"/>
+  <arg name="depth_info_topic" default="/camera/depth/camera_info"/>
+  <!-- The prebuilt PCD is part of localization, not an optional debug node.
+       It keeps the FAST-LIVO2 local frame tied to the campus/lanelet frame and
+       becomes the absolute measurement source during single-sensor failures. -->
+  <arg name="map_localizer_enable" default="true"/>
+  <!-- Relative degraded-mode motion front-ends are independent of the
+       absolute saved-map localizer. This lets us validate the persistent
+       FAST-LIVO2 ESIKF + single-sensor failsafes in the local frame before
+       introducing any PCD/global-map correction. -->
+  <arg name="failsafe_frontends_enable" default="true"/>
+  <arg name="map_localizer_mode" default="localize"/>
+  <arg name="map_path" default="/results/failsafe_saved_map.pcd"/>
+  <arg name="visual_voxel_map_path" default=""/>
+  <arg name="map_localizer_config" default="$(find fast_livo2)/config/map_failsafe_recorded_cart.yaml"/>
+  <arg name="visual_place_enable" default="false"/>
+  <arg name="visual_map_image_dir" default=""/>
+  <arg name="visual_map_trajectory" default=""/>
+  <arg name="visual_place_enable_on_healthy" default="true"/>
+  <arg name="visual_place_lidar_fail_query_hz" default="0.75"/>
+  <arg name="visual_place_lidar_fail_pool_size" default="32"/>
+  <arg name="visual_place_lidar_fail_feature_pnp" default="false"/>
+  <arg name="visual_place_lidar_fail_akaze" default="false"/>
+  <arg name="depth_failover_only" default="false"/>
+  <arg name="map_initial_pose_topic" default="/initialpose"/>
+
+  <arg name="drop_sensor" default="none"/>
+  <arg name="drop_start" default="30.0"/>
+  <arg name="drop_duration" default="10.0"/>
+  <arg name="record_trajectory" default="true"/>
+  <arg name="trajectory_output" default="/results/trajectory.csv"/>
+  <!-- Optional CPU isolation. Leave empty on unknown hardware; the benchmark
+       runner supplies the verified LOQ split (mapper P-cores, map work E-cores). -->
+  <arg name="mapper_launch_prefix" default=""/>
+  <arg name="map_localizer_launch_prefix" default="nice -n 12"/>
+  <arg name="visual_place_launch_prefix" default="nice -n 12"/>
+  <arg name="failsafe_frontend_launch_prefix" default="nice -n 10"/>
+  <arg name="rgbd_frontend_launch_prefix" default="$(arg failsafe_frontend_launch_prefix)"/>
+  <arg name="map_primary_on_imu_failure" default="true"/>
+  <arg name="map_primary_on_lidar_failure" default="true"/>
+
+  <param name="use_sim_time" type="bool" value="$(arg use_sim_time)"/>
+  <rosparam command="load" file="$(arg config_file)"/>
+  <rosparam command="load" file="$(arg calibration_file)"/>
+  <!-- FAST-LIVO2's single ESIKF always remains the active estimator.  The
+       saved PCD supplies its global anchor and degraded-mode corrections. -->
+  <param name="failsafe/map_depth_primary_on_lidar_failure"
+         type="bool" value="$(arg map_primary_on_lidar_failure)"/>
+  <param name="failsafe/map_primary_on_imu_failure"
+         type="bool" value="$(arg map_primary_on_imu_failure)"/>
+
+  <node pkg="fast_livo2" type="fast_livo2_calibration_guard.py"
+        name="fast_livo2_calibration_guard" output="screen" required="true"/>
+
+  <!-- Normalize archived ALIVE sensor timing/PointCloud2 point-time units. -->
+  <node pkg="fast_livo2" type="fast_livo2_sensor_adapter.py"
+        name="fast_livo2_sensor_adapter" output="screen" required="true">
+    <param name="source_lidar_topic" value="$(arg lidar_topic)"/>
+    <param name="source_imu_topic" value="$(arg imu_topic)"/>
+    <param name="source_camera_topic" value="$(arg camera_topic)"/>
+    <param name="output_lidar_topic" value="/fast_livo2/source/lidar"/>
+    <param name="output_imu_topic" value="/fast_livo2/source/imu"/>
+    <param name="output_camera_topic" value="/fast_livo2/source/image"/>
+    <param name="camera_timestamp_mode" value="$(arg camera_timestamp_mode)"/>
+    <param name="max_camera_hz" value="$(arg max_camera_hz)"/>
+  </node>
+
+  <!-- Drop exactly one stream at runtime; all other messages are unchanged. -->
+  <node pkg="fast_livo2" type="fast_livo2_failure_injector.py"
+        name="fast_livo2_failure_injector" output="screen" required="true">
+    <param name="source_lidar_topic" value="/fast_livo2/source/lidar"/>
+    <param name="source_imu_topic" value="/fast_livo2/source/imu"/>
+    <param name="source_camera_topic" value="/fast_livo2/source/image"/>
+    <param name="output_lidar_topic" value="/fast_livo2/input/lidar"/>
+    <param name="output_imu_topic" value="/fast_livo2/input/imu"/>
+    <param name="output_camera_topic" value="/fast_livo2/input/image"/>
+    <param name="drop_sensor" value="$(arg drop_sensor)"/>
+    <param name="drop_start" value="$(arg drop_start)"/>
+    <param name="drop_duration" value="$(arg drop_duration)"/>
+  </node>
+
+  <node pkg="fast_livo2" type="fastlivo_mapping" name="laserMapping"
+        output="screen" required="true"
+        launch-prefix="$(arg mapper_launch_prefix)"/>
+
+  <node if="$(arg record_trajectory)" pkg="fast_livo2"
+        type="record_failsafe_trajectory.py" name="fast_livo2_failsafe_recorder"
+        output="screen">
+    <param name="output" value="$(arg trajectory_output)"/>
+  </node>
+
+  <node if="$(arg map_localizer_enable)" pkg="fast_livo2"
+        type="failsafe_map_localizer" name="fast_livo2_failsafe_map_localizer"
+        output="screen" required="true"
+        launch-prefix="$(arg map_localizer_launch_prefix)">
+    <rosparam command="load" file="$(arg map_localizer_config)"/>
+    <param name="mode" value="$(arg map_localizer_mode)"/>
+    <param name="map_path" value="$(arg map_path)"/>
+    <param name="visual_map_path" value="$(arg visual_voxel_map_path)"/>
+    <param name="lidar_topic" value="/fast_livo2/input/lidar"/>
+    <param name="depth_topic" value="$(arg depth_topic)"/>
+    <param name="depth_info_topic" value="$(arg depth_info_topic)"/>
+    <param name="odom_topic" value="/aft_mapped_to_init"/>
+    <param name="failsafe_mode_topic" value="/fast_livo2/failsafe_mode"/>
+    <param name="registered_cloud_topic" value="/Laser_map"/>
+    <param name="depth_failover_only" value="$(arg depth_failover_only)"/>
+    <param name="initial_pose_topic" value="$(arg map_initial_pose_topic)"/>
+  </node>
+
+  <!-- IMU-failure short-term LiDAR motion front-end.  This is measurement
+       generation only: every accepted relative SE(3) is fused into the same
+       persistent FAST-LIVO2 ESIKF.  Keeping it separate from saved-map GICP
+       preserves the ~10 Hz relative update cadence. -->
+  <node if="$(arg failsafe_frontends_enable)" pkg="fast_livo2"
+        type="lidar_relative_failsafe_frontend"
+        name="fast_livo2_lidar_relative_failsafe" output="screen"
+        launch-prefix="$(arg failsafe_frontend_launch_prefix)">
+    <param name="lidar_topic" value="/fast_livo2/input/lidar"/>
+    <param name="mode_topic" value="/fast_livo2/failsafe_mode"/>
+    <param name="output_topic" value="/fast_livo2/relative_motion_hint"/>
+    <param name="voxel_leaf" value="0.45"/>
+    <param name="icp_iterations" value="18"/>
+    <param name="max_correspondence" value="2.2"/>
+    <param name="min_dt" value="0.03"/>
+    <param name="max_dt" value="0.20"/>
+  </node>
+
+  <!-- Visual place recognition is only a coarse measurement front-end.
+       It publishes candidate map regions; failsafe_map_localizer must still
+       geometrically verify/refine them before the single FAST-LIVO2 ESIKF
+       receives any correction. -->
+  <node if="$(arg visual_place_enable)" pkg="fast_livo2"
+        type="visual_place_hint.py" name="fast_livo2_visual_place_hint"
+        output="screen" launch-prefix="$(arg visual_place_launch_prefix)">
+    <rosparam command="load" file="$(arg map_localizer_config)"/>
+    <param name="image_dir" value="$(arg visual_map_image_dir)"/>
+    <param name="trajectory_csv" value="$(arg visual_map_trajectory)"/>
+    <param name="color_topic" value="/fast_livo2/input/image"/>
+    <param name="depth_topic" value="$(arg depth_topic)"/>
+    <param name="failsafe_mode_topic" value="/fast_livo2/failsafe_mode"/>
+    <!-- The validated standalone matcher queries roughly once per second. -->
+    <param name="query_hz" value="2.0"/>
+    <param name="enable_on_healthy" value="$(arg visual_place_enable_on_healthy)"/>
+    <param name="healthy_query_hz" value="1.0"/>
+    <param name="healthy_pool_size" value="128"/>
+    <param name="enable_on_lidar_fail" value="true"/>
+    <param name="lidar_fail_query_hz" value="$(arg visual_place_lidar_fail_query_hz)"/>
+    <param name="lidar_fail_pool_size" value="$(arg visual_place_lidar_fail_pool_size)"/>
+    <param name="lidar_fail_feature_pnp_enable" value="$(arg visual_place_lidar_fail_feature_pnp)"/>
+    <param name="lidar_fail_feature_use_akaze" value="$(arg visual_place_lidar_fail_akaze)"/>
+    <param name="lidar_fail_feature_akaze_cache" value="/visual_akaze_cache.npz"/>
+    <param name="top_retrieval" value="8"/>
+    <param name="max_candidates" value="4"/>
+    <param name="imu_local_pool_size" value="24"/>
+    <param name="imu_expanded_pool_size" value="72"/>
+    <param name="imu_expand_after_misses" value="2"/>
+  </node>
+
+  <!-- Metric RGB-D frame-to-frame odometry for degraded operation.
+       ORB feature tracking + depth-backed PnP supplies short-term SE(3);
+       the saved-map localizer remains the absolute correction source. -->
+  <node if="$(arg failsafe_frontends_enable)" pkg="fast_livo2"
+        type="rgbd_failsafe_vo.py" name="fast_livo2_rgbd_failsafe_vo"
+        output="screen" launch-prefix="$(arg rgbd_frontend_launch_prefix)">
+    <rosparam command="load" file="$(arg map_localizer_config)"/>
+    <!-- FAST-LIVO2 itself intentionally receives a CPU-throttled image stream.
+         The LiDAR-loss RGB-D frontend is dormant while healthy, so when it is
+         activated it can safely use the original 30-Hz RealSense RGB stream.
+         This is required by its 0.025-0.18 s frame-to-frame VO window. -->
+    <param name="color_topic" value="$(arg camera_topic)"/>
+    <param name="color_rebase_with_shared_offset" value="true"/>
+    <!-- Failure-only RGB-D VO: queue_size=1 + serialized processing already
+         bounds CPU. Do not intentionally discard frames and then reject the
+         resulting loaded-CPU cadence. -->
+    <param name="process_every_n" value="3"/>
+    <param name="max_frame_dt" value="1.50"/>
+    <param name="depth_sync_max_age" value="0.08"/>
+    <param name="depth_buffer_size" value="64"/>
+    <param name="depth_alignment_stride" value="2"/>
+    <param name="depth_topic" value="$(arg depth_topic)"/>
+    <param name="depth_info_topic" value="$(arg depth_info_topic)"/>
+    <param name="failsafe_mode_topic" value="/fast_livo2/failsafe_mode"/>
+  </node>
+
+</launch>

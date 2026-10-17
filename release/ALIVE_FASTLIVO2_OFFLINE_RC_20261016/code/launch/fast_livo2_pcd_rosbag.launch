@@ -1,0 +1,25 @@
+<launch>
+  <arg name="rviz" default="true"/>
+  <arg name="map_path" default="$(find fast_livo2)/maps/full_campus.pcd"/>
+  <arg name="lidar_topic" default="/lidar103/velodyne_points"/>
+  <arg name="imu_topic" default="/mavros/imu/data"/>
+  <arg name="camera_topic" default="/camera/color/image_raw"/>
+  <arg name="initial_search_xy" default="5.0"/>
+  <arg name="initial_search_yaw_deg" default="25.0"/>
+  <arg name="periodic_check_sec" default="3.0"/>
+
+  <include file="$(find fast_livo2)/launch/fast_livo2_pcd_localization.launch">
+    <arg name="use_sim_time" value="true"/>
+    <arg name="rviz" value="$(arg rviz)"/>
+    <arg name="camera_timestamp_mode" value="rebase"/>
+    <arg name="config_file" value="$(find fast_livo2)/config/laptop_rosbag.yaml"/>
+    <arg name="calibration_file" value="$(find fast_livo2)/config/calibration/recorded_cart_bag.yaml"/>
+    <arg name="map_path" value="$(arg map_path)"/>
+    <arg name="lidar_topic" value="$(arg lidar_topic)"/>
+    <arg name="imu_topic" value="$(arg imu_topic)"/>
+    <arg name="camera_topic" value="$(arg camera_topic)"/>
+    <arg name="initial_search_xy" value="$(arg initial_search_xy)"/>
+    <arg name="initial_search_yaw_deg" value="$(arg initial_search_yaw_deg)"/>
+    <arg name="periodic_check_sec" value="$(arg periodic_check_sec)"/>
+  </include>
+</launch>

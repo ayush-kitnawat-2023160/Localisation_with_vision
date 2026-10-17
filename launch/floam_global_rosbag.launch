@@ -1,0 +1,21 @@
+<launch>
+  <arg name="initial_search_z" default="2.0"/>
+  <arg name="initial_search_yaw" default="20.0"/>
+  <arg name="initial_search_xy" default="5.0"/>
+  <!-- Validate global localization with LiDAR alone, before FAST-LIVO2 handoff. -->
+  <arg name="rviz" default="true"/>
+  <arg name="map_path" default="$(find fast_livo2)/maps/full_campus.pcd"/>
+  <arg name="lidar_topic" default="/lidar103/velodyne_points"/>
+  <include file="$(find fast_livo2)/launch/fast_livo2_floam_compat_localization.launch">
+    <arg name="use_sim_time" value="true"/>
+    <arg name="rviz" value="$(arg rviz)"/>
+    <arg name="initial_search_z" value="$(arg initial_search_z)"/>
+    <arg name="initial_search_yaw" value="$(arg initial_search_yaw)"/>
+    <arg name="initial_search_xy" value="$(arg initial_search_xy)"/>
+    <arg name="enable_fast_livo" value="false"/>
+    <arg name="use_fast_local_prediction" value="false"/>
+    <arg name="calibration_file" value="$(find fast_livo2)/config/calibration/recorded_cart_bag.yaml"/>
+    <arg name="map_path" value="$(arg map_path)"/>
+    <arg name="lidar_topic" value="$(arg lidar_topic)"/>
+  </include>
+</launch>

@@ -1,0 +1,56 @@
+{
+  "validated_date": "2026-10-16",
+  "frozen_image_id": "sha256:9fda983a4dd504c4e52d672f257d3e4ad703fd72e8e8c9ce24bfc0aeb33abe48",
+  "source_calibration_file": "config/calibration/recorded_cart_bag.yaml",
+  "sensor_rig_rotation_sanity": {
+    "recorded_cart_lidar_to_camera": {
+      "determinant": 1.0,
+      "orthonormal_error": 1.7e-09
+    },
+    "recorded_cart_lidar_to_body": {
+      "determinant": 1.0,
+      "orthonormal_error": 1.5e-09
+    }
+  },
+  "config_files_present": [
+    "config/calibration/recorded_cart_bag.yaml",
+    "config/failsafe_rosbag.yaml",
+    "config/map_failsafe_recorded_cart.yaml"
+  ],
+  "reference_sanity": {
+    "loopclosed_reference_recovered_equivalent.csv": {
+      "samples": 615,
+      "span_s": 307.365,
+      "monotone_timestamps": true,
+      "surveyed_independent_ground_truth": false
+    },
+    "REFERENCE_18SEP_LIDAR_PCD_REBUILT_20261016.csv": {
+      "samples": 221,
+      "span_s": 221.891,
+      "monotone_timestamps": true,
+      "surveyed_independent_ground_truth": false
+    }
+  },
+  "saved_visual_keyframe_image_count": 615,
+  "external_assets": [
+    {
+      "path": "step3_global/map_db_sweeps_fast/cache/global_map.pcd",
+      "bytes": 81909437
+    },
+    {
+      "path": "step3_global/healthy_validation_assets_20261014/final_camera_rgb_lidar_voxel_15cm.pcd",
+      "bytes": 17870848
+    },
+    {
+      "path": "step3_global/healthy_validation_assets_20261014/orb_cache_dev_20261015/visual_orb_retrieval_exact.npz",
+      "bytes": 13165388
+    }
+  ],
+  "original_rosbags_not_bundled": true,
+  "absolute_extrinsics_field_verified": false,
+  "clock_synced_on_actual_cart": false,
+  "latency_profiled_on_actual_cart": false,
+  "stop_to_DBW_verified": false,
+  "surveyed_GT_available": false,
+  "readiness": "PASS STATIC SOURCE/DATA PRESENCE CHECKS ONLY; NOT VEHICLE SAFE"
+}

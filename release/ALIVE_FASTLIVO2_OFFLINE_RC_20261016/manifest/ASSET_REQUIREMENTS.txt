@@ -1,0 +1,13 @@
+Required source references (outside clean source snapshot):
+  step3_global/healthy_validation_assets_20261014/loopclosed_reference_recovered_equivalent.csv
+  results/18_sep_2026_combined/REFERENCE_REBUILT_FROM_LIDAR_PCD_20261016/REFERENCE_18SEP_LIDAR_PCD_REBUILT_20261016.csv
+
+Required saved geometry:
+  step3_global/map_db_sweeps_fast/cache/global_map.pcd
+  step3_global/healthy_validation_assets_20261014/final_camera_rgb_lidar_voxel_15cm.pcd
+  step3_global/healthy_validation_assets_20261014/visual_map_images/
+  step3_global/healthy_validation_assets_20261014/orb_cache_dev_20261015/visual_orb_retrieval_exact.npz
+Original bags:
+  /home/devil/Desktop/car/alive-repo/rosbag/camera_lidar_imu_gps.bag
+  /home/devil/Desktop/car/alive-repo/rosbag/18_sep_2026_combined.bag
+All paths relative to original repository root unless absolute.

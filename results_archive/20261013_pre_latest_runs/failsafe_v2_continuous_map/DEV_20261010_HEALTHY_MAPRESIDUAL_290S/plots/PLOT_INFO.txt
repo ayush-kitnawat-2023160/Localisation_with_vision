@@ -1,0 +1,10 @@
+run=DEV_20261010_HEALTHY_MAPRESIDUAL_290S
+sensor=none
+timeline_origin=first_same_bag_reference_scan
+reference_is_validated_gt=false
+failure_start_s=NA
+failure_end_s=NA
+global_samples=2841
+gicp_fixes=285
+max_global_step_m=1.200939
+end_reference_disagreement_m=0.826312

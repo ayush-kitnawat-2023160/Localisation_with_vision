@@ -1,0 +1,10 @@
+run=DEV_visual_healthy_90s
+sensor=none
+timeline_origin=first_same_bag_reference_scan
+reference_is_validated_gt=false
+failure_start_s=NA
+failure_end_s=NA
+global_samples=439
+gicp_fixes=41
+max_global_step_m=6.208584
+end_reference_disagreement_m=16.376035

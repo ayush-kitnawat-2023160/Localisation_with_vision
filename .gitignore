@@ -1,0 +1,20 @@
+# Catkin / compiler output
+build/
+devel/
+install/
+logs/
+
+# Python/cache noise
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Large runtime data and generated validation artifacts
+*.bag
+results/
+step3_global/
+
+# Editor / OS noise
+*.swp
+*~
+.DS_Store
