@@ -1,119 +1,117 @@
-# FAST-LIVO2 Failsafe Localization
+# ALiVE FAST-LIVO2 Failsafe — Fresh ZED X ROS-bag Workspace
 
-Robust ROS Noetic localization pipeline for the ALiVE golf cart. The current system keeps FAST-LIVO2 as the persistent estimator and adds health-aware degraded operation plus saved-map/global corrections rather than switching to unrelated SLAM stacks.
+This checkout has been reset for **new recordings** (19 October 2026). Historical
+PCD/Lanelet maps, frozen validation outputs, experiment reports, release ZIPs
+and cached scan databases were removed from this working tree. The ROS1
+FAST-LIVO2 estimator, RGB-D failsafe, map-localizer source, tests, Docker
+build and experimental code are preserved.
 
-## Current status
+**Fresh startup has NO global map, no global relocalization and no validated
+map-frame /pose output.** It provides local odometry and sensor-failure
+experimentation only. Do not connect this offline configuration to vehicle
+planning or controls as a trusted global localization source.
 
-The current `camera_lidar_imu_gps.bag` pipeline has completed Step 1–3 validation:
+## Calibration
 
-- Healthy FAST-LIVO2 remains alive over the full ~290 s run.
-- Camera failure falls back to LiDAR + IMU.
-- LiDAR failure uses RGB-D/visual motion with appearance-guided saved visual-voxel-map correction.
-- IMU failure uses visual/LiDAR motion with saved-map correction.
-- Step 3 global map/PCD correction is smoothed and uses bounded SE(2)-style map correction rather than hard pose jumps.
-- LiDAR-failure map correction uses visual place as the global anchor and bounded depth GICP refinement. Pure local depth-only tracking was tested and rejected because repeated road geometry caused longitudinal drift.
+Active new-bag profile: config/calibration/zedx_current.yaml
 
-Step 4 is under way. On `18_sep_2026_combined.bag`, healthy and camera-failure 220 s replays dated 2026-10-08 now regain PCD tracking after roughly 5.5 s rather than 32 s at the overlapping route section. The keyframe-ID-only rejection was replaced by map-space reachability, yaw/height plausibility, GICP geometry and two-scan confirmation. See `results/18_sep_2026_combined/README.md`. Cross-bag LiDAR/IMU failure retests, original-bag regression and independent absolute-accuracy checks are still pending.
+- Camera frame: zedx_left_camera_optical_frame.
+- LiDAR frame: velodyne.
+- Convention: p_camera = Rcl * p_velodyne + Pcl.
+- Translation Pcl: [-0.027102, -0.526644, 0.003782] metres.
+- Rotation: extrin_calib/Rcl in the active profile, derived from supplied
+  roll=0.110776, pitch=-1.171075, yaw=1.476343 **radians**.
+- The two user-provided TF files contained the same values; the source is
+  retained at config/calibration/zedx_lidar_tf_source_20261019.yaml.
+- With 40 supplied camera/LiDAR correspondences and intrinsics from the
+  existing ZED X profile, reprojection errors were 3.502 px median,
+  5.931 px 95th percentile. This is a consistency check, not surveyed truth.
+- Camera intrinsics (960x600, fx=fy=371.695343, cx=477.192841,
+  cy=294.337616) come from the EXISTING ZED X rosbag profile, not from
+  the uploaded TF files. Verify against new bag CameraInfo.
+- LiDAR-to-IMU, LiDAR-to-base and sensor height are **legacy inherited
+  assumptions**, not newly measured values. The real-cart calibration file
+  config/calibration/new_cart_measured.yaml stays LOCKED (ready: false).
 
-## Canonical pipeline files
+The newly uploaded 40 image/object correspondence pairs are preserved
+under config/calibration/measurements_20261019/ for reproducibility.
+Check the transform AND those reprojections in this checkout:
 
-Only the canonical implementation is kept in the active source tree:
+    python3 scripts/verify_zedx_calibration.py
 
-- `src/failsafe_map_localizer.cpp` — failure-aware saved-map correction and degraded-mode map localization.
-- `src/step3_global_acquirer.cpp` — global PCD/map acquisition and correction authority.
-- `src/lidar_relative_failsafe_frontend.cpp` — LiDAR relative-motion frontend.
-- `scripts/rgbd_failsafe_vo.py` — RGB-D degraded relative motion.
-- `scripts/visual_place_hint.py` — appearance retrieval + depth-map geometric verification.
-- `scripts/fast_livo2_sensor_adapter.py` — sensor adaptation/health plumbing.
-- `scripts/fast_livo2_failure_injector.py` — reproducible sensor-failure injection.
-- `launch/fast_livo2_step3_global_rosbag.launch` — current Step-3 rosbag launch.
-- `launch/fast_livo2_failsafe_rosbag.launch` — current failsafe launch.
-- `config/failsafe_rosbag.yaml` — main bag configuration.
-- `config/map_failsafe_recorded_cart.yaml` — current saved-map/failsafe tuning.
-- `config/calibration/recorded_cart_bag.yaml` — recorded-cart calibration.
+To test another calibration dataset instead, supply different files:
 
-Historical `pre_*`, `v*`, and `lidarfix_*` source/config/launch copies were intentionally removed. Reproducibility is provided by retained result runs and Docker tags rather than duplicate source files in the active tree.
+    python3 scripts/verify_zedx_calibration.py \
+      --image-points /path/to/image_points.txt \
+      --object-points /path/to/object_points.txt
 
-## Repository layout
+ZED X aligned depth uses 32FC1 in metres with depth_scale=1.0 and native
+sensor timestamps. The earlier RealSense bag path used 16UC1 millimetres;
+do not mix the two profiles.
 
-```text
-FAST-LIVO2-failsafe/
-├── config/             ROS/calibration/failsafe configuration
-├── docker/             reproducible ROS Noetic build/run environment
-├── include/            C++ headers
-├── launch/             canonical launch files
-├── maps/               lanelet/static map assets used by compatibility launches
-├── msg/                ROS messages
-├── results/            curated validation evidence only
-├── rviz/               RViz configuration
-├── scripts/            runtime, validation and plotting tools
-├── src/                FAST-LIVO2 + failsafe implementation
-├── step3_global/       current fast global-localization DB + shared PCD keyframes
-├── test/               tests
-├── tools/              utilities
-├── validation/         validation helpers/configuration
-└── vendor/             vendored build dependencies
-```
+## Fresh ROS-bag replay (no saved map required)
 
-`step3_global/map_db_sweeps_fast/pcd` intentionally points to `step3_global/map_db_sweeps/pcd`. Do not delete the shared `map_db_sweeps/pcd` directory when pruning caches.
+New default entrypoint:
 
-## Build
+    launch/fast_livo2_zedx_fresh_rosbag.launch
 
-```bash
-cd /home/devil/Desktop/car/alive-repo/FAST-LIVO2-failsafe
-./docker/build.sh
-```
+Its legacy alias launch/fast_livo2_looooo_rosbag.launch uses the same
+fresh-map-free settings. Both disable map_localizer_enable, visual place
+recognition and saved-map recovery-lock requirements.
 
-This produces `fast_livo2_failsafe:dev` and `fast_livo2:dev`. The final bounded-place validation image is also tagged locally as:
+Example using the included sibling ROS-bag directory:
 
-```text
-fast_livo2_failsafe:lidar-best-boundedplace-20261006
-```
+    ./docker/build.sh
+    ./scripts/run_fresh_zedx_bag.sh looooo/localization.bag 1.0
 
-The validation runner defaults to the freshly built `fast_livo2_failsafe:dev`; override with `STEP3_IMAGE` when reproducing a frozen image.
+Or, within an already configured ROS1 Noetic catkin environment, use
+two terminals:
 
-The Step-4 global reacquisition fix is controlled by the ROS private parameter `tracking_global_reacquire_physical_gate` (enabled by default in `launch/fast_livo2_step3_global_rosbag.launch`). Set it to `false` for the historical keyframe-ID-guard behavior. Physical gate tuning uses `tracking_global_reacquire_position_slack_m`, `tracking_global_reacquire_vertical_slack_m` and `tracking_global_reacquire_predicted_pose_weight` in addition to the existing global reacquisition motion/yaw limits.
+    roslaunch fast_livo2 fast_livo2_zedx_fresh_rosbag.launch
 
-## Run a validation case
+    rosbag play --clock /path/to/new_recording.bag
 
-The main runner is:
+Default sensor topics (override these launch args if new recordings differ):
 
-```bash
-./scripts/run_step3_global_case.sh <case_name> <none|camera|lidar|imu>
-```
+    lidar_topic  = /lidar103/velodyne_points
+    imu_topic    = /mavros/imu/data
+    camera_topic = /zedx/zed_node/left/image_rect_color
+    depth_topic  = /zedx/zed_node/depth/depth_registered
 
-Example full LiDAR-failure test:
+The fresh local estimator publishes /aft_mapped_to_init; inspect
+/fast_livo2/failsafe_mode and /fast_livo2/sensor_health for failures.
+**Do not assume /pose exists or is global without an explicit, independently
+verified map localizer.**
 
-```bash
-STEP3_VISUAL_PLACE_ENABLE=true \
-PLAY_DURATION=290 \
-DROP_START=125 \
-DROP_DURATION=40 \
-./scripts/run_step3_global_case.sh FINAL_LIDAR_TEST lidar
-```
+## Adding a brand-new map later
 
-Important environment overrides supported by the runner include `STEP3_IMAGE`, `BAG_PATH`, `STEP3_MAP_DB`, `STEP3_VISUAL_MAP`, `STEP3_VISUAL_MAP_IMAGES`, `STEP3_VISUAL_MAP_TRAJ`, `STEP3_MAP_LOCALIZER_CONFIG`, `STEP3_REFERENCE`, `PLAY_DURATION`, `DROP_START`, and `DROP_DURATION`.
+1. Record and validate new bag timestamps, sensor topics, CameraInfo,
+   depth units, point-cloud point-time field and all physical extrinsics.
+2. Build a new, internally consistent LiDAR map from these recordings.
+   A FAST-LIVO2 odometry-based PCD export alone is not automatically
+   loop-closed or globally registered.
+3. Store new maps in maps/ (ignored by Git) and create a new corresponding
+   saved-map database/visual-keyframe database under step3_global/ (ignored).
+4. Only after map validation, explicitly enable map_localizer_enable and
+   supply map_path, visual_map_path and a matching calibration. Do not
+   re-enable map-lock-required sensor recovery until the global node is
+   present and verified.
+5. Evaluate healthy, camera-failure, LiDAR-failure, IMU-failure and recovery
+   on each new bag. The existing source is NOT approved for cart operation.
 
-The default recorded-cart validation currently expects external assets under `/home/devil/Desktop/car/alive-repo/`, including the rosbag and final visual voxel-map/reference trajectory. The current fast global DB itself is stored under this repo at `step3_global/map_db_sweeps_fast`.
+## Cleanup boundaries
 
-## Curated results
+Removed historical data under this repository only:
 
-See `results/camera_lidar_imu_gps/failsafe_v2_continuous_map/README.md` for the retained result set and metrics.
+- maps/full_campus.pcd and maps/full_campus_lanelet.osm;
+- results/, results_archive/, step3_global/, release/, reports/;
+- historical result-dependent README files and old diagnostic reference JSON;
+- Python bytecode caches.
 
-The accepted primary 290 s runs are:
+Preserved: source, build files, tests, calibration/launch configurations,
+historical experiment scripts, and ../rosbag/ (the sibling folder, including
+your four new ZED X recordings).
 
-- `FINAL290_HEALTHY_BOUNDEDPLACE_20261006`
-- `FINAL290_CAMERA_FAIL_BOUNDEDPLACE_20261006`
-- `FINAL290_LIDAR_FAIL_BOUNDEDPLACE_20261006`
-- `FINAL290_IMU_FAIL_BOUNDEDPLACE_20261006`
-
-Useful LiDAR-failure comparison runs retained are:
-
-- `LIDARFIX_V9_SMOOTHRATE_FULLAUTH_180S_20261005` — previous baseline.
-- `LIDARFIX_BOUNDEDPLACE_180S_20261006` — bounded-place milestone.
-
-For every final run, the clean map overlay is `plots/07_orange_trajectory_on_pcd_clean.png`.
-
-## Generated-data policy
-
-Large generated results and Step-3 databases are intentionally ignored by `.gitignore` and `.dockerignore`. The Docker build context should contain code/config only; runtime map DBs and validation results are mounted separately. Do not commit rosbag files, generated result folders, or temporary build directories into the source history.
+New results and map assets go under ignored paths such as outputs/, results/,
+maps/ and step3_global/. **Git history still contains older tracked results**;
+no commits were created, branches rewritten or remote history changed.

@@ -1,6 +1,0 @@
-case=LIDARFIX_V9_SMOOTHRATE_FULLAUTH_180S_20261005
-sensor=lidar
-play_duration_s=180
-failure_start_s=125
-failure_duration_s=40
-failure_end_s=165

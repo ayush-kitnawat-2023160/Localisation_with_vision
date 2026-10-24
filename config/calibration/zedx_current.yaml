@@ -1,0 +1,75 @@
+# Current ZED X / Velodyne calibration for fresh OFFLINE rosbag work.
+# The uploaded tf.yaml and tf_postprocessed.yaml (2026-10-19) are identical.
+# Camera <- LiDAR values come from the supplied tf_postprocessed.yaml:
+#   p_zedx_left_camera_optical = Rcl * p_velodyne + Pcl
+# Camera intrinsics come from /zedx/zed_node/left/camera_info in the bags.
+# The 40 newly supplied image/object correspondences reproduce this transform with
+# 3.50 px median and 5.93 px 95th-percentile reprojection error.
+# IMPORTANT: The user-supplied files measure camera <- LiDAR only.
+# LiDAR/base, LiDAR/IMU and height values are INHERITED from the legacy cart
+# profile and have NOT been re-measured for the new bag/hardware.
+# calibration.ready=true is ONLY for offline replay with those assumptions;
+# do not use this file to unlock a live cart. The physical-cart template
+# new_cart_measured.yaml remains calibration.ready=false.
+calibration:
+  ready: true
+  measurement_id: ZEDX_CAMERA_LIDAR_TF_VERIFIED_2026-10-19_OFFLINE_ONLY
+  base_frame: base_link
+  lidar_frame: velodyne
+  camera_frame: zedx_left_camera_optical_frame
+  sensor_height_m: 1.5
+  fast_to_floam_time_offset_sec: 0.0
+  lidar_to_base_translation: [0.0, 0.0, 0.0]
+  lidar_to_base_rotation: [0.925416516, -0.173648251, 0.336824223,
+                           0.163175972, 0.984807740, 0.059391224,
+                           -0.342020284, 0.000000000, 0.939692570]
+  lidar_to_imu_translation: [0.0, 0.0, 0.0]
+  lidar_to_imu_rotation: [0.925416516, -0.173648251, 0.336824223,
+                          0.163175972, 0.984807740, 0.059391224,
+                          -0.342020284, 0.000000000, 0.939692570]
+
+extrin_calib:
+  extrinsic_T: [0.0, 0.0, 0.0]
+  extrinsic_R: [0.925416516, -0.173648251, 0.336824223,
+                0.163175972, 0.984807740, 0.059391224,
+                -0.342020284, 0.000000000, 0.939692570]
+  Pcl: [-0.027102, -0.526644, 0.003782]
+  Rcl: [0.036702982, -0.999044881, 0.023711117,
+        0.387427003, -0.007646112, -0.921868675,
+        0.921169479, 0.043021656, 0.386776329]
+
+# ZED X image and LiDAR headers share a time base in these bags. Keep the
+# source timestamps; the measured bag-record arrival lag is transport/record
+# latency and is not a sensor-clock calibration offset.
+time_offset:
+  imu_time_offset: 0.0
+  lidar_time_offset: 0.0
+  img_time_offset: 0.0
+  exposure_time_init: 0.0
+
+# ZED left optical <- ZED internal IMU rotation, composed from driver
+# /tf_static in the recorded bags. This is OFFLINE PROVISIONAL, not measured
+# against the mounted cart body. Expose it explicitly instead of embedding
+# a bag-derived quaternion in the KLT ROS node.
+camera_imu_fallback:
+  imu_to_optical_rotation: [
+    -0.005394324467, -0.999966200599, -0.006204750114,
+     0.001816707826,  0.006195030286, -0.999979160369,
+     0.999983800287, -0.005405484269,  0.001783228419
+  ]
+  rotation_source: ZED_X_DRIVER_TF_OFFLINE_PROVISIONAL_NOT_PHYSICAL_SURVEY
+
+laserMapping:
+  cam_model: Pinhole
+  cam_width: 960
+  cam_height: 600
+  scale: 1.0
+  cam_fx: 371.6953430175781
+  cam_fy: 371.6953430175781
+  cam_cx: 477.1928405761719
+  cam_cy: 294.3376159667969
+  cam_d0: 0.0
+  cam_d1: 0.0
+  cam_d2: 0.0
+  cam_d3: 0.0
+  cam_d4: 0.0

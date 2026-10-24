@@ -1,8 +1,0 @@
-run=STEP4_REGRESSION_HEALTHY_20261008
-sensor=none
-failure_start_s=NA
-failure_end_s=NA
-global_samples=2841
-gicp_fixes=284
-max_global_step_m=1.229450
-end_3d_error_m=0.785362

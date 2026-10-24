@@ -1,8 +1,0 @@
-run=STEP4_DEPTH_RELOCK_ORIGINAL_LIDAR_290S_20261008
-sensor=lidar
-failure_start_s=125.0
-failure_end_s=165.0
-global_samples=2568
-gicp_fixes=197
-max_global_step_m=7.519785
-end_3d_error_m=6.104610

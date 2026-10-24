@@ -22,6 +22,14 @@ from sensor_msgs.msg import Image, Imu, PointCloud2, PointField
 class SensorAdapter:
     def __init__(self):
         self.lidar_time_scale = float(rospy.get_param("~lidar_time_scale", 1.0e6))
+        # Archived ALIVE VLP-16 bags use seconds, whereas some drivers already
+        # emit microseconds. An old magnitude heuristic was appropriate for
+        # exploration but must not silently guess units on real hardware.
+        self.lidar_time_unit = str(rospy.get_param("~lidar_time_unit", "auto_offline"))
+        if self.lidar_time_unit not in ("auto_offline", "seconds", "microseconds"):
+            raise rospy.ROSInitException("lidar_time_unit must be seconds/microseconds/auto_offline")
+        if self.lidar_time_unit == "auto_offline" and not rospy.get_param("/use_sim_time", False):
+            raise rospy.ROSInitException("Live LiDAR point-time unit must be explicit, never auto_offline")
         self.camera_mode = str(rospy.get_param("~camera_timestamp_mode", "preserve")).lower()
         self.max_camera_hz = float(rospy.get_param("~max_camera_hz", 0.0))
         self.last_camera_source_stamp = None
@@ -109,7 +117,27 @@ class SensorAdapter:
         # Move the header to the earliest point and shift the point offsets
         # before converting seconds to microseconds.  This is the same adapter
         # convention used by the verified NEW_CART deployment.
-        if sample.size and float(np.max(np.abs(sample))) < 1.0e3:
+        convert_seconds=(sample.size and float(np.max(np.abs(sample))) < 1.0e3)
+        if self.lidar_time_unit == 'seconds':
+            if not sample.size or float(np.max(np.abs(sample)))>.5:
+                rospy.logerr_throttle(5.,"Refusing LiDAR: declared seconds but time-field span is implausible")
+                return
+            convert_seconds=True
+        if self.lidar_time_unit == 'microseconds':
+            if not sample.size or float(np.max(np.abs(sample)))>500000.:
+                rospy.logerr_throttle(5.,"Refusing LiDAR: declared microseconds but point times are implausible")
+                return
+            convert_seconds=False
+            if float(np.min(sample)) < -1.0e-3:
+                raw=bytearray(out.data)
+                target=np.frombuffer(raw,dtype=np.uint8)
+                target_values=self.field_view(target,out,time_field,dtype)
+                target_finite=np.isfinite(target_values)
+                minimum=float(np.min(target_values[target_finite]))
+                target_values[target_finite]-=minimum
+                out.header.stamp+=rospy.Duration.from_sec(minimum*1.0e-6)
+                out.data=bytes(raw)
+        if convert_seconds:
             raw = bytearray(out.data)
             target = np.frombuffer(raw, dtype=np.uint8)
             target_values = self.field_view(target, out, time_field, dtype)

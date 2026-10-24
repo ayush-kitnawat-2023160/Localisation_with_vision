@@ -1,0 +1,26 @@
+<launch>
+  <!-- INDEPENDENT GPS-/LiDAR-free RGB-D+ZED IMU odometry CANDIDATE only.
+       Never broadcasts TF, never /pose, never overrides FAST-LIVO2.
+       Designed strictly for rosbag until inherited physical mount measured. -->
+  <arg name="use_sim_time" default="true"/>
+  <arg name="calibration_file" default="$(find fast_livo2)/config/calibration/zedx_current.yaml"/>
+  <arg name="image_topic" default="/zedx/zed_node/left/image_rect_color"/>
+  <arg name="depth_topic" default="/zedx/zed_node/depth/depth_registered"/>
+  <arg name="imu_topic" default="/zedx/zed_node/imu/data"/>
+  <arg name="lidar_topic" default="/lidar103/velodyne_points"/>
+  <arg name="scale" default="0.65"/>
+  <arg name="frame_period" default="0.13"/>
+  <param name="use_sim_time" value="$(arg use_sim_time)"/>
+  <rosparam command="load" file="$(arg calibration_file)"/>
+  <node pkg="fast_livo2" type="fresh_zedx_camera_imu_odom.py"
+        name="fresh_zedx_camera_imu_odom" output="screen">
+    <param name="offline_only" value="true"/>
+    <param name="image_topic" value="$(arg image_topic)"/>
+    <param name="depth_topic" value="$(arg depth_topic)"/>
+    <param name="imu_topic" value="$(arg imu_topic)"/>
+    <param name="lidar_topic" value="$(arg lidar_topic)"/>
+    <param name="image_scale" value="$(arg scale)"/>
+    <param name="frame_period_sec" value="$(arg frame_period)"/>
+    <param name="require_imu_for_healthy" value="true"/>
+  </node>
+</launch>

@@ -1,0 +1,57 @@
+<launch>
+  <!-- Healthy, map-free FAST-LIVO2 baseline: ONE ESIKF, LIO + native VIO.
+       No failsafe state machine, RGB-D sidecar, failure injection, or global
+       localization. This is a DIAGNOSTIC ONLY, NOT a vehicle launch. -->
+  <arg name="config_file" default="$(find fast_livo2)/config/failsafe_rosbag.yaml"/>
+  <arg name="calibration_file" default="$(find fast_livo2)/config/calibration/zedx_current.yaml"/>
+  <arg name="lidar_topic" default="/lidar103/velodyne_points"/>
+  <arg name="imu_topic" default="/mavros/imu/data"/>
+  <arg name="camera_topic" default="/zedx/zed_node/left/image_rect_color"/>
+  <arg name="max_camera_hz" default="5.0"/>
+  <arg name="enable_visual" default="true"/>
+  <arg name="visual_mode" default="fusion"/>
+  <arg name="trajectory_output" default="/data/outputs/baseline_full_20261019/trajectory.csv"/>
+
+  <param name="use_sim_time" type="bool" value="true"/>
+  <rosparam command="load" file="$(arg config_file)"/>
+  <rosparam command="load" file="$(arg calibration_file)"/>
+  <param name="vio/preserve_lidar_cadence" type="bool" value="true"/>
+  <param name="failsafe/enable" type="bool" value="false"/>
+  <param name="failsafe/map_correction_enable" type="bool" value="false"/>
+  <!-- Native FAST-LIVO2 photometric visual state updates, not failsafe gate. -->
+  <param name="failsafe/healthy_visual_gate_enable" type="bool" value="false"/>
+  <!-- Diagnostic-only choice: full visual EKF or full frontend with no EKF. -->
+  <param name="vio/diagnostic_tracking_only_en" type="bool"
+         value="$(eval arg('visual_mode') == 'track_only')"/>
+  <param name="vio/diagnostic_force_lidar_sync_en" type="bool"
+         value="$(eval arg('visual_mode') == 'camera_lidar_scheduler')"/>
+  <!-- Use native roslaunch boolean gating: arg('enable_visual') can evaluate
+       to Python True, not the literal string 'true'. A string comparison
+       silently forced common/img_en=0 in previously labeled 'livo' runs. -->
+  <group if="$(arg enable_visual)">
+    <param name="common/img_en" type="int" value="1"/>
+  </group>
+  <group unless="$(arg enable_visual)">
+    <param name="common/img_en" type="int" value="0"/>
+  </group>
+  <param name="common/lid_topic" value="/fast_livo2/input/lidar"/>
+  <param name="common/imu_topic" value="/fast_livo2/input/imu"/>
+  <param name="common/img_topic" value="/fast_livo2/input/image"/>
+
+  <node pkg="fast_livo2" type="fast_livo2_calibration_guard.py"
+        name="baseline_calibration_guard" output="screen" required="true"/>
+  <node pkg="fast_livo2" type="fast_livo2_sensor_adapter.py"
+        name="baseline_sensor_adapter" output="screen" required="true">
+    <param name="source_lidar_topic" value="$(arg lidar_topic)"/>
+    <param name="source_imu_topic" value="$(arg imu_topic)"/>
+    <param name="source_camera_topic" value="$(arg camera_topic)"/>
+    <param name="camera_timestamp_mode" value="preserve"/>
+    <param name="max_camera_hz" value="$(arg max_camera_hz)"/>
+  </node>
+  <node pkg="fast_livo2" type="fastlivo_mapping" name="laserMapping"
+        output="screen" required="true"/>
+  <node pkg="fast_livo2" type="record_failsafe_trajectory.py"
+        name="baseline_trajectory_recorder" output="screen">
+    <param name="output" value="$(arg trajectory_output)"/>
+  </node>
+</launch>

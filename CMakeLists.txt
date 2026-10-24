@@ -168,6 +168,15 @@ if(OpenMP_CXX_FOUND)
 endif()
 
 catkin_install_python(PROGRAMS
+  scripts/fresh_visual_global_localizer.py
+  scripts/fresh_visual_global_learned_bridge.py
+  scripts/fresh_multimodal_candidate_observer.py
+  scripts/fresh_safe_handoff_review.py
+  scripts/fresh_zedx_camera_imu_odom.py
+  scripts/deployment_sensor_health_shadow.py
+  scripts/deployment_klt_continuation_shadow.py
+  scripts/fresh_local_odom_fallback_bridge.py
+  scripts/fresh_pose_authority.py
   scripts/fast_livo2_sensor_adapter.py
   scripts/fast_livo2_failure_injector.py
   scripts/record_failsafe_trajectory.py
@@ -179,6 +188,13 @@ catkin_install_python(PROGRAMS
   scripts/fast_livo2_lanelet_bridge.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
+
+# The review executable imports this pure-Python rule module both from source
+# workspaces and after a catkin install. It is NOT an executable or ROS node.
+install(FILES scripts/safe_handoff_rules.py scripts/zedx_rgbd_imu_odom_core.py
+  scripts/deployment_sensor_health_core.py
+  scripts/deployment_klt_continuation_core.py
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/scripts)
 
 install(TARGETS
   vikit_common

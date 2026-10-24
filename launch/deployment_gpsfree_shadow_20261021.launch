@@ -1,0 +1,143 @@
+<launch>
+  <!-- SHADOW NAMESPACE ISOLATION is independent of /pose authorization.
+       Otherwise an existing cart planner can consume the mapper's canonical
+       /aft_mapped_to_init or /tf even though /pose is disabled. These global
+       remaps apply to every included ROS node, keeping FAST, Step3, XFeat,
+       KLT, supervisor and the continuation diagnostic connected to each other
+       but disconnected from all legacy navigation input/output channels. -->
+  <remap from="/aft_mapped_to_init" to="/fast_livo2/deployment/fast_odom_candidate"/>
+  <remap from="/path" to="/fast_livo2/deployment/path_candidate"/>
+  <remap from="/tf" to="/fast_livo2/deployment/tf_candidate_only"/>
+  <remap from="/Laser_map" to="/fast_livo2/deployment/laser_map_candidate"/>
+  <remap from="/cloud_registered" to="/fast_livo2/deployment/registered_cloud_candidate"/>
+  <remap from="/fast_livo2/failsafe_mode" to="/fast_livo2/deployment/fast_failsafe_mode"/>
+  <remap from="/fast_livo2/map_correction" to="/fast_livo2/deployment/map_correction_candidate"/>
+  <remap from="/fast_livo2/step3_global_lock" to="/fast_livo2/deployment/step3_global_lock_candidate"/>
+  <remap from="/fast_livo2/step3_tracking_correction" to="/fast_livo2/deployment/step3_tracking_correction_candidate"/>
+  <remap from="/fast_livo2/step3_failover_initialpose" to="/fast_livo2/deployment/step3_failover_initialpose_candidate"/>
+  <remap from="/fast_livo2/step3_global_pose" to="/fast_livo2/deployment/step3_global_pose_candidate"/>
+  <remap from="/fast_livo2/step3_gicp_map_pose" to="/fast_livo2/deployment/step3_gicp_map_pose_candidate"/>
+  <remap from="/fast_livo2/step3_status" to="/fast_livo2/deployment/step3_status"/>
+  <remap from="/fast_livo2/step3_mh_recovery_candidate" to="/fast_livo2/deployment/mh_recovery_candidate"/>
+  <remap from="/fast_livo2/step3_mh_status" to="/fast_livo2/deployment/mh_status"/>
+  <remap from="/fast_livo2/visual_global_candidate" to="/fast_livo2/deployment/visual_global_candidate"/>
+  <remap from="/fast_livo2/fallback/camera_imu_odom_candidate" to="/fast_livo2/deployment/klt_local_odom_candidate"/>
+  <!-- ONE coherent GPS-FREE SHADOW stack.
+       - Runs ONE FAST-LIVO2 ESIKF for continuous local odometry.
+       - Runs Step3 GPS-FREE Scan Context + GICP multi-hypothesis global poses.
+       - Runs GPS-FREE XFeat retrieval + PnP VISUAL candidate (external worker).
+       - Runs independent CPU KLT RGB-D + ZED gyro candidate; not a TF.
+       - Read-only sensor health/advisory; no automatic map reset or odom mux.
+       - Optional pose authority produces /fast_livo2/fused_map_pose for SHADOW
+         monitoring but production /pose is unconditionally DISABLED.
+       - No /cmd_vel, motor/brake control, GPS, or automatic handoff.
+       LIVE mode refuses old offline-calibration profiles at the guard.
+       Requires explicit LiDAR map and calibration paths, never default maps
+       or old recorded initial poses.
+  -->
+  <arg name="use_sim_time" default="false"/>
+  <arg name="calibration_file"/>
+  <arg name="map_db"/>
+  <arg name="visual_map_dir"/>
+  <arg name="lidar_topic" default="/lidar103/velodyne_points"/>
+  <!-- REQUIRED for live use. No default point-time unit may silently enable
+       deskewing when the driver changes its convention. Archived ALIVE bags
+       use seconds; some hardware drivers already supply microseconds. -->
+  <arg name="lidar_point_time_unit" default="UNSET_MUST_SPECIFY_SECONDS_OR_MICROSECONDS"/>
+  <arg name="fast_imu_topic" default="/mavros/imu/data"/>
+  <arg name="camera_topic" default="/zedx/zed_node/left/image_rect_color"/>
+  <arg name="depth_topic" default="/zedx/zed_node/depth/depth_registered"/>
+  <arg name="zed_imu_topic" default="/zedx/zed_node/imu/data"/>
+  <arg name="visual_worker_url" default="http://127.0.0.1:18091/localize"/>
+  <arg name="learned_visual_enable" default="true"/>
+  <arg name="lidar_reacquire_hz" default="1.0"/>
+  <arg name="candidate_fused_map_pose_enable" default="true"/>
+
+  <!-- ISOLATE the original FAST-LIVO2 local odometry from saved-map corrections.
+       The FAST mapper subscribes to Step3 feedback topics internally and its
+       tracking_correction_enable defaults TRUE in C++. A /pose ban ALONE is
+       not enough to prevent map feedback from changing the ESIKF!
+       Shadow mode must compare independent local/global estimates first.
+       These override any values loaded by the included offline tuning YAML. -->
+  <param name="step3/tracking_correction_enable" type="bool" value="false"/>
+  <param name="step3/prior_map_enable" type="bool" value="false"/>
+  <param name="step3/gyro_bias_feedback_enable" type="bool" value="false"/>
+  <param name="step3/anchored_local_feedback_enable" type="bool" value="false"/>
+  <param name="failsafe/map_correction_enable" type="bool" value="false"/>
+
+  <!-- Upstream mapper + global components. No unverified GPS soft prior,
+       no legacy GPS-assisted visual matcher, no competing RGB-D VO frontend.
+       Opt-in LiDAR MH seeds are still GICP verified; never map resets. -->
+  <include file="$(find fast_livo2)/launch/fresh_multimodal_global_rosbag.launch">
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+    <arg name="calibration_file" value="$(arg calibration_file)"/>
+    <arg name="map_db" value="$(arg map_db)"/>
+    <arg name="visual_map_dir" value="$(arg visual_map_dir)"/>
+    <arg name="lidar_topic" value="$(arg lidar_topic)"/>
+    <arg name="lidar_point_time_unit" value="$(arg lidar_point_time_unit)"/>
+    <arg name="external_map_correction_enable" value="false"/>
+    <arg name="imu_topic" value="$(arg fast_imu_topic)"/>
+    <arg name="camera_topic" value="$(arg camera_topic)"/>
+    <arg name="depth_topic" value="$(arg depth_topic)"/>
+    <arg name="rgbd_frontend_enable" value="false"/>
+    <arg name="failure_injector_enable" value="false"/>
+    <arg name="adapter_output_lidar_topic" value="/fast_livo2/input/lidar"/>
+    <arg name="adapter_output_imu_topic" value="/fast_livo2/input/imu"/>
+    <arg name="adapter_output_camera_topic" value="/fast_livo2/input/image"/>
+    <arg name="lidar_global_enable" value="true"/>
+    <arg name="lidar_mh_enable" value="true"/>
+    <arg name="lidar_mh_required_hits" value="3"/>
+    <arg name="lidar_mh_reacquire_hz" value="$(arg lidar_reacquire_hz)"/>
+    <arg name="lidar_mh_visual_seed_enable" value="$(arg learned_visual_enable)"/>
+    <arg name="lidar_trajectory_yaw_fit_enable" value="false"/>
+    <arg name="lidar_gps_soft_prior_enable" value="false"/>
+    <arg name="visual_global_enable" value="false"/>
+    <arg name="visual_learned_enable" value="$(arg learned_visual_enable)"/>
+    <arg name="visual_shadow_query_healthy" value="true"/>
+    <arg name="visual_learned_worker_url" value="$(arg visual_worker_url)"/>
+    <arg name="lidar_handoff_review_enable" value="true"/>
+    <arg name="publish_legacy_pose" value="false"/>
+    <arg name="pose_authority_shadow_enable" value="$(arg candidate_fused_map_pose_enable)"/>
+    <arg name="fused_map_pose_topic" value="/fast_livo2/shadow_fused_map_pose"/>
+    <arg name="fused_global_status_topic" value="/fast_livo2/shadow_global_status"/>
+  </include>
+
+  <node pkg="fast_livo2" type="fresh_zedx_camera_imu_odom.py"
+        name="fresh_zedx_camera_imu_odom" output="screen" required="true">
+    <param name="offline_only" value="$(arg use_sim_time)"/>
+    <param name="shadow_only" value="true"/>
+    <!-- Shadow input only, no TF or /pose even after operator 'ack'. -->
+    <param name="explicit_live_shadow_ack" value="true"/>
+    <param name="image_topic" value="$(arg camera_topic)"/>
+    <param name="depth_topic" value="$(arg depth_topic)"/>
+    <param name="imu_topic" value="$(arg zed_imu_topic)"/>
+    <param name="lidar_topic" value="$(arg lidar_topic)"/>
+    <param name="image_scale" value="0.65"/>
+    <param name="frame_period_sec" value="0.065"/>
+    <param name="require_imu_for_healthy" value="true"/>
+    <param name="max_image_silence_sec" value="0.7"/>
+    <param name="max_output_gap_sec" value="0.65"/>
+  </node>
+
+  <node pkg="fast_livo2" type="deployment_sensor_health_shadow.py"
+        name="deployment_sensor_health_shadow" output="screen" required="true">
+    <param name="shadow_only" value="true"/>
+    <param name="lidar_topic" value="/fast_livo2/input/lidar"/>
+    <param name="fast_imu_topic" value="/fast_livo2/input/imu"/>
+    <param name="fast_odom_topic" value="/aft_mapped_to_init"/>
+    <param name="rgb_topic" value="$(arg camera_topic)"/>
+    <param name="depth_topic" value="$(arg depth_topic)"/>
+    <param name="zed_imu_topic" value="$(arg zed_imu_topic)"/>
+  </node>
+
+  <!-- This diagnostic publishes KLT continuation ONLY after an observed
+       LiDAR sensor timeout and fresh overlapping healthy pre-outage poses.
+       It NEVER replaces FAST /aft_mapped_to_init or changes map->odom. -->
+  <node pkg="fast_livo2" type="deployment_klt_continuation_shadow.py"
+        name="deployment_klt_continuation_shadow" output="screen" required="true">
+    <param name="shadow_only" value="true"/>
+    <param name="max_outage_sec" value="15.0"/>
+    <param name="max_seed_age_sec" value="0.90"/>
+    <param name="max_pair_skew_sec" value="0.12"/>
+  </node>
+</launch>

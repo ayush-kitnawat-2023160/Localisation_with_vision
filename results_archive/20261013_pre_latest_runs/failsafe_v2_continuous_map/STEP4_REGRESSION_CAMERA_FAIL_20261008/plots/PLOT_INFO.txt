@@ -1,8 +1,0 @@
-run=STEP4_REGRESSION_CAMERA_FAIL_20261008
-sensor=camera
-failure_start_s=125.0
-failure_end_s=165.0
-global_samples=112
-gicp_fixes=12
-max_global_step_m=1.092275
-end_3d_error_m=0.525558

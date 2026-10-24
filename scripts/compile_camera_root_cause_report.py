@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""Compile executed diagnostic evidence; explicitly separates tests from assumptions."""
+import json, csv
+from pathlib import Path
+import numpy as np
+ROOT=Path(__file__).resolve().parents[1]; O=ROOT/'outputs';D=O/'camera_diagnostics_20261019'
+def load(p):
+ p=Path(p);return json.loads(p.read_text()) if p.is_file() else None
+
+def traj(folder):
+ p=O/folder/'trajectory.csv'
+ if not p.exists():return None
+ rr=list(csv.DictReader(p.open()));t=np.array([float(r['timestamp']) for r in rr]);pos=np.array([[float(r[k]) for k in ('x','y','z')] for r in rr]);dt=np.diff(t);v=np.linalg.norm(np.diff(pos,axis=0),axis=1)/np.maximum(dt,1e-6)
+ s=(O/folder/'status.txt').read_text() if (O/folder/'status.txt').exists() else ''
+ return dict(poses=len(t),seconds=float(t[-1]-t[0]),max_gap_s=float(dt.max()),z_span_m=float(np.ptp(pos[:,2])),vmax_mps=float(v.max()),completed='run_complete' in s and 'bagplay_exit=0' in s)
+def delta_trajectory(a,b):
+ def read(root):
+  rr=list(csv.DictReader((O/root/'trajectory.csv').open()))
+  return np.array([float(r['timestamp']) for r in rr]),np.array([[float(r[k]) for k in ('x','y','z')] for r in rr])
+ if not (O/a/'trajectory.csv').exists() or not (O/b/'trajectory.csv').exists():return None
+ ta,xa=read(a);tb,xb=read(b);lo=max(ta[0],tb[0]);hi=min(ta[-1],tb[-1]);tt=np.arange(lo+.25,hi,.25)
+ if len(tt)<2:return None
+ A=np.column_stack([np.interp(tt,ta,xa[:,i]) for i in range(3)]);B=np.column_stack([np.interp(tt,tb,xb[:,i]) for i in range(3)])
+ pa=np.array([np.interp(lo,ta,xa[:,i]) for i in range(3)]);pb=np.array([np.interp(lo,tb,xb[:,i]) for i in range(3)]);d=(B-pb)-(A-pa)
+ xy=np.linalg.norm(d[:,:2],axis=1)
+ return dict(endpoint_xy_m=float(xy[-1]),p95_xy_m=float(np.percentile(xy,95)),endpoint_z_m=float(d[-1,2]))
+
+def main():
+ base=load(D/'diagnostics.json');integrity=load(O/'looooo_integrity_20261019'/'sanity_report.json')
+ if base is None or integrity is None:raise SystemExit('Need previous completed experiments')
+ files={b:load(D/f'{b}_vertical.json') for b in ['localization','localization_from2','localization_3']}
+ files['localization_full']=load(O/'looooo_integrity_20261019'/'localization_full_vertical.json')
+ planes={b:load(D/f'{b}_gravity_plane.json') for b in ['localization','localization_full','localization_3']}
+ sames={'localization':traj('diag_loc_match075_scheduler_20261019'),'localization_from2':traj('diag_localization_from2_scheduler075_20261019'),'localization_full':traj('diag_localization_full_scheduler075_20261019')}
+ high_camera=traj('diag_loc_native_camera10hz_20261019')
+ full_high_camera=traj('diag_full_native_camera10hz_20261019')
+ lines=['# FAST-LIVO2 / ZED X localization root-cause investigation','', 'Date: October 19, 2026. Repo: FailSafe_FastLivo2. **Offline diagnostics only; maps and production alive-dev unchanged.**','', '## Executive findings','', '**All four rosbag recordings are structurally readable. Their 100 Hz MAVROS IMU and 10 Hz VLP-16 pointcloud streams have no significant acquisition timestamp gaps.**', '', '**Native FAST-LIVO2 image-timed LIVO scheduling is a major confirmed failure mechanism on localization.bag in these controlled replays.** Simply disabling visual photometric EKF corrections does not recover the stable 10 Hz LiDAR-IMU pipeline. Forcing normal LiDAR-time updates while leaving camera callbacks active does recover it. That is a diagnostic control, NOT yet a working full camera/IMU fusion solution.', '', '## 1. Bag verification (all serialized records read)','', '| Bag | Duration s | Messages read / indexed | LiDAR max gap s | IMU max gap s | Structural pass |', '|---|---:|---:|---:|---:|---|']
+ for b,e in integrity.items():
+  x=e['audit'];y=x['sensor_timestamps'];lines.append(f"| {b} | {x['duration_s']:.2f} | {x['read_message_total']:,} / {x['indexed_message_total']:,} | {y['lidar']['max_gap_s']:.3f} | {y['imu']['max_gap_s']:.3f} | {x['structural_pass']} |")
+ lines+=['','Full message read and serialized header/index checks argue against corruption or truncation, **not** against bad calibration, visual aliasing, timestamp association mistakes, or estimator logic. Camera recorder-delivery lag (median ~154–159 ms) is not a measured camera hardware clock offset.','', '## 2. Matched-rate, same-bag, camera isolation','', 'Source: localization.bag; rosbag rate 0.75× in all four configurations; same ZED image throttle 5 Hz; all are single-estimator ROS1 runs; no global corrections, no injected failures. First three used fast_livo2:diag; scheduler-bypass run used equivalent rebuilt diagnostic image fast_livo2:diag_scheduler.','', '| Mode | Camera callbacks | Tracking/landmark maintenance | Visual ESIKF state updates | Poses | Max gap s | Max pose speed m/s | Z span m | Endpoint XY disagreement with LIO m |','|---|---|---|---|---:|---:|---:|---:|---:|']
+ for mode in ('lio','track','fusion','scheduler'):
+  x=base['configurations'][mode];dx=base['relative_to_lio'].get(mode,{}).get('end_relative_horizontal_disagreement_m',0.)
+  lines.append(f"| {mode} | {'No' if mode=='lio' else 'Yes'} | {'Yes' if mode in ('track','fusion') else 'No'} | {'Yes' if mode=='fusion' else 'No'} | {x['poses']} | {x['max_gap_sec']:.3f} | {x['max_pose_derived_speed_mps']:.2f} | {x['z_span_m']:.2f} | {dx:.2f} |")
+ lines+=['', '**Key inference:** Native LIVO splits LiDAR/IMU into image-timed propagation/update cycles (`src/LIVMapper.cpp`, `sync_packages()`, `case LIVO`). With 5 Hz camera frame throttle, map odometry is updated ~4 Hz. When image tracking remains active but no visual state correction is applied, the problem persists. With the camera still subscribed and input data unchanged but 10 Hz LiDAR scheduling restored using `syncLidarImuFallback()`, the LiDAR-like estimate is recovered. This isolates scheduling, though additional photometric bias remains possible.', '', '## 3. Visual processing and resources','']
+ for mode in ('lio','track','fusion','scheduler'):
+  s=base['configurations'][mode];r=s['resources'];p=s['estimated_frontend_processing_ms'];d=p.get('track_only_report',{});ret=p.get('retrieveFromVisualSparseMap',{});ekf=p.get('computeJacobianAndUpdateEKF',{})
+  lines.append(f"- **{mode}**: median process CPU={r['cpu_pct_median']}%, peak RSS={r['rss_mib_max']} MiB (missing means sampler process-name mismatch); sparse retrieval median={ret.get('median_ms')} ms; visual EKF median={ekf.get('median_ms')} ms; diagnostic track-only total median={d.get('total_median_ms')} ms; sync-warning count={s['sync_warnings']}. ")
+ lines+=['','CPU samples are `ps` process lifetime averages, not per-frame utilization. A separate unrelated container was running during tests, so host contention is not completely controlled. The reported `Current Total Time` in estimator logs covers both LIO and VIO stages; do not treat its pooled median as exclusive camera latency.','', '## 4. Replication with camera-subscribed, LiDAR-timed mode','', '| Bag | Scheduler-bypass result | Poses | Duration s | Max pose gap s | Max pose speed m/s | Z span m |', '|---|---|---:|---:|---:|---:|---:|']
+ for name,v in sames.items():
+  if v:lines.append(f"| {name} | {'completed' if v['completed'] else 'not yet completed'} | {v['poses']} | {v['seconds']:.2f} | {v['max_gap_s']:.3f} | {v['vmax_mps']:.2f} | {v['z_span_m']:.2f} |")
+  else:lines.append(f'| {name} | not run | — | — | — | — | — |')
+ lines+=['', 'For all three completed scheduler-only controls, the recorded timestamp, XYZ position and quaternion arrays were **exactly equal**, element for element, to the corresponding LiDAR–IMU-only trajectories—even when replay rates differed (1.0× versus 0.75× for the longer two bags). This is strong evidence that the control successfully restores the ordinary deterministic LiDAR/IMU update path; it does not mean visual fusion is functioning.', '', '## 4a. Camera-rate sweep with native LIVO scheduling','']
+ if high_camera:
+  lines.append(f"Native LIVO with camera throttle raised to 10 Hz (same localization.bag, 0.75× playback): completed={high_camera['completed']}, poses={high_camera['poses']}, trajectory span={high_camera['seconds']:.2f}s, largest pose gap={high_camera['max_gap_s']:.3f}s, maximum pose-derived speed={high_camera['vmax_mps']:.2f} m/s, Z span={high_camera['z_span_m']:.2f}m. Raising the image rate changes the estimator correction cadence and CPU load; compare against the 5 Hz fusion run, but do not take smoothness as surveyed accuracy.")
+  c=delta_trajectory('diag_loc_match075_lio_20261019','diag_loc_native_camera10hz_20261019')
+  if c:lines.append(f"On localization.bag, relative to the matched-rate LiDAR-only run, 10 Hz camera native LIVO has P95 horizontal disagreement {c['p95_xy_m']:.2f}m, final horizontal difference {c['endpoint_xy_m']:.2f}m, and final relative-Z difference {c['endpoint_z_m']:.2f}m. The same bag at 5 Hz camera had P95 XY disagreement ~73.43m and end XY disagreement ~58.56m.")
+ else:
+  lines.append('10 Hz camera native LIVO rate sweep not yet completed.')
+ if full_high_camera:
+  lines.append(f"Native LIVO 10 Hz camera limit on localization_full.bag: completed={full_high_camera['completed']}, poses={full_high_camera['poses']}, trajectory span={full_high_camera['seconds']:.2f}s, maximum pose gap={full_high_camera['max_gap_s']:.3f}s, max pose-derived speed={full_high_camera['vmax_mps']:.2f}m/s, Z span={full_high_camera['z_span_m']:.2f}m.")
+  c=delta_trajectory('diag_localization_full_scheduler075_20261019','diag_full_native_camera10hz_20261019')
+  if c:lines.append(f"Full-bag native 10 Hz visual versus 0.75x scheduler-control relative differences: endpoint XY {c['endpoint_xy_m']:.2f}m, P95 XY {c['p95_xy_m']:.2f}m, endpoint Z {c['endpoint_z_m']:.2f}m. This remains an estimator-to-estimator comparison, not ground truth.")
+ lines+=['', '## 5. Extrinsic sanity and vertical geometry','', 'The supplied camera<-LiDAR tf matches `config/calibration/zedx_current.yaml`; all 40 supplied 3D-2D corresponding landmarks project at median 3.502 px, p95 5.931 px and max 7.510 px. This supports internal consistency but not fully accurate physical calibration. **The configured LiDAR<-IMU and LiDAR<-base rotation/translation were inherited from the prior mounting configuration and have NOT been physically remeasured for these recordings.**', '', 'Exploratory ground-plane normal fitting on initial near-stationary LiDAR scans (using a gravity-prior-filtered slab) yields median plane vs. current IMU+extrinsic gravity prediction angular discrepancies:']
+ for b,v in planes.items():
+  if v:lines.append(f"- {b}: {v['median_plane_angle_deg']:.2f}° over {len(v['scan_plane_samples'])} selected scans; this is prior-biased and should NOT be treated as calibration proof.")
+ lines+=['', 'The fitted near-ground plane offset in the initial localization and localization_full scans is approximately 2.0–2.1m from the LiDAR origin, compared with the inherited profile sensor_height_m=1.5m. This is an **unverified candidate height discrepancy**, not a physical measurement: plane selection, slope, surface choice and frame conventions could all affect it. Do not auto-change the calibration to 2.1m.']
+ lines+=['', 'Vertical self-consistency and GPS-relative-altitude **proxy** (GPS altitude is NOT ground truth):', '', '| Bag | LIO z span m | GPS altitude span m | XY revisit pairs <2m, >20s | Revisit abs-Z p95 m |', '|---|---:|---:|---:|---:|']
+ for b,v in files.items():
+  if v:lines.append(f"| {b} | {v['lio_z_span_m']:.2f} | {v['gps_altitude_span_m']:.2f} | {v['revisits_xy_within_2m_after_20s_pairs']} | {v['revisit_z_p95_absolute_difference_m']:.3f} |")
+ lines+=['', 'Nearby-in-XY revisits estimate internal Z repeatability but do not prove correct global elevation, slope, LiDAR-to-IMU lever arm, loop-closure alignment, or Lanelet compatibility. The full-bag LIO final relative vertical displacement is ~+2.96 m while GPS relative altitude changes ~−11.45 m; the ~14.05 m discrepancy shows that GPS altitude cannot independently certify the route without surveying.', '', '## 6. Root cause and next implementation','', '1. Keep FAST-LIVO2 LiDAR/IMU ESIKF on **every complete LiDAR scan** (10 Hz in these bags), regardless of camera frame cadence. Do not use the native 5 Hz LIVO image-timed splitter as the only LiDAR state-update scheduler.', '2. Process ZED RGB-D/visual features asynchronously with bounded queues; skip stale frames. Apply accepted visual measurement residuals at **original camera capture timestamps**, using an IMU state ring buffer plus repropagation or a carefully designed out-of-sequence update mechanism. Do not naively correct the latest EKF state with a delayed camera pose.', '3. Gate visually derived corrections with feature geometry, reprojection inliers, per-frame delta, covariance and temporal consistency. Avoid double-counting IMU or applying absolute map anchors as relative odometry.', '4. Independently measure the new physical LiDAR<-IMU transform / lever arm and compare to the profile; confirm ZED optical frames and intrinsics. Recheck map Z on repeat passes with ground/loop constraints.', '5. Regenerate LiDAR keyframes and 2D–3D RGB-D visual keyframes **from a full, corrected, optimized 226-second trajectory**. Current `maps/campus_full_raw_v2` is partial raw odometry (165 LiDAR / 122 visual keyframes) and should not be used as authoritative `/pose`.', '', '## 7. Reproduce and visualize','', '```bash', 'cd ~/Desktop/ALIVE_N/FailSafe_FastLivo2', 'cat outputs/camera_diagnostics_20261019/diagnostics.json', 'cat outputs/camera_diagnostics_20261019/ROOT_CAUSE_REPORT.md', 'cat outputs/looooo_integrity_20261019/sanity_report.md', 'xdg-open outputs/looooo_integrity_20261019/localization_xy.png', 'xdg-open outputs/looooo_integrity_20261019/localization_full_z.png', 'python3 scripts/report_camera_diagnostics_20261019.py', 'python3 scripts/compile_camera_root_cause_report.py', '```','', 'Representative isolated replay (diagnostic image has been built and installed as fast_livo2:diag_scheduler):','', '```bash', 'IMAGE=fast_livo2:diag_scheduler BAG_NAME=localization.bag RATE=0.75 ENABLE_VISUAL=true VISUAL_MODE=camera_lidar_scheduler RUN_NAME=my_scheduler_audit CONTAINER=my_scheduler_audit ./scripts/run_baseline_zedx_full.sh', '```','', '**Scope:** No live driving validation, no surveyed ground truth, no final loop closure, no production integration, no modifications to alive-dev or raw bag files.']
+ dst=D/'ROOT_CAUSE_REPORT.md';dst.write_text('\n'.join(lines)+'\n');print('Wrote',dst,'lines',len(lines))
+if __name__=='__main__':main()

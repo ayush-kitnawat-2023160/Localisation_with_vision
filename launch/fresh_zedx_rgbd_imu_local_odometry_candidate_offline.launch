@@ -1,0 +1,22 @@
+<launch>
+  <!-- OFFLINE ONLY. These publishers do not touch FAST-LIVO2 ESIKF, /pose,
+       TF, map->odom, or any controller. Requires source bag from another node. -->
+  <arg name="use_sim_time" default="true"/>
+  <arg name="calibration_file" default="$(find fast_livo2)/config/calibration/zedx_current.yaml"/>
+  <param name="use_sim_time" value="$(arg use_sim_time)"/>
+  <rosparam command="load" file="$(arg calibration_file)"/>
+  <node pkg="fast_livo2" type="fresh_zedx_camera_imu_odom.py" name="fresh_zedx_camera_imu_odom" output="screen">
+    <param name="offline_only" value="true"/>
+    <param name="frame_period_sec" value="0.065"/>
+    <param name="max_output_gap_sec" value="0.65"/>
+    <param name="require_imu_for_healthy" value="true"/>
+  </node>
+  <node pkg="fast_livo2" type="fresh_local_odom_fallback_bridge.py" name="fresh_local_odom_fallback_bridge" output="screen">
+    <param name="offline_only" value="true"/>
+    <param name="fast_odom_topic" value="/fallback_test/healthy_fast_odom"/>
+    <param name="lidar_failure_verified_topic" value="/fallback_test/lidar_failed_simulated"/>
+    <param name="max_align_sec" value="0.12"/>
+    <param name="max_seed_age_sec" value="0.6"/>
+    <param name="max_output_gap_sec" value="0.65"/>
+  </node>
+</launch>

@@ -1,4 +1,0 @@
-local_snapshot_root
-frozen_image=fast_livo2_failsafe:single-build-rc-20261016
-image_id=sha256:9fda983a4dd504c4e52d672f257d3e4ad703fd72e8e8c9ce24bfc0aeb33abe48
-This is the exact source tree from image, except runtime-mounted host launch/config/sensor adapter scripts, patched in with matching tested bytes. Results and 800MB image keyframe database are external assets.

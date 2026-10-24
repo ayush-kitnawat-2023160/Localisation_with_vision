@@ -1,0 +1,11 @@
+# Original user-supplied camera <- LiDAR transform, ROS RPY angles in radians.
+# tf.yaml and tf_postprocessed.yaml provided 2026-10-19 are byte-identical.
+# p_zedx_left_camera_optical_frame = R_xyz(roll,pitch,yaw) * p_velodyne + t
+zedx_left_camera_optical_frame:
+  velodyne:
+    x: -0.027102
+    y: -0.526644
+    z: 0.003782
+    roll: 0.110776
+    pitch: -1.171075
+    yaw: 1.476343

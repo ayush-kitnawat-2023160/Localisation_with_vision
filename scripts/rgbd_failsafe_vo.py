@@ -76,6 +76,8 @@ class RGBDFailsafeVO:
         # already uses this exact offset in depth_cb().
         self.color_rebase_with_shared_offset = bool(
             rospy.get_param("~color_rebase_with_shared_offset", False))
+        self.depth_rebase_with_shared_offset = bool(
+            rospy.get_param("~depth_rebase_with_shared_offset", True))
 
         self.fx = float(rospy.get_param("/laserMapping/cam_fx", 641.710876464844))
         self.fy = float(rospy.get_param("/laserMapping/cam_fy", 640.919189453125))
@@ -102,6 +104,12 @@ class RGBDFailsafeVO:
         self.max_frame_dt = float(rospy.get_param("~max_frame_dt", 0.35))
         self.depth_alignment_stride = max(1, int(
             rospy.get_param("~depth_alignment_stride", 2)))
+        # ZED X depth_registered already uses the rectified LEFT RGB optical
+        # frame, image dimensions and pixel intrinsics.  Do not reproject
+        # hundreds of thousands of points through OpenCV on every VO update.
+        # Explicit opt-in; legacy RealSense cross-camera registration remains.
+        self.registered_depth = bool(
+            rospy.get_param("~registered_depth", False))
 
         self.Rdc = mat3(rospy.get_param("~depth_to_color_R", [
             0.9999934434890747, 0.003619089489802718, 0.000103622158349026,
@@ -122,6 +130,14 @@ class RGBDFailsafeVO:
         self.orb = cv2.ORB_create(
             nfeatures=int(rospy.get_param("~orb_features", 1500)),
             fastThreshold=12)
+        # Optional low-CPU inter-frame tracker.  It replaces repeated ORB
+        # descriptor matching with forward/backward KLT correspondence.
+        # Geometric 3D-3D/PnP validation and ESIKF hint transport are unchanged.
+        # OFF by default so legacy regression results remain reproducible.
+        self.use_klt = bool(rospy.get_param("~use_klt", False))
+        self.klt_max_corners = int(rospy.get_param("~klt_max_corners", 320))
+        self.klt_min_tracks = int(rospy.get_param("~klt_min_tracks", 35))
+        self.klt_fb_error = float(rospy.get_param("~klt_fb_error_px", 1.4))
         self.matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=False)
         self.ratio = float(rospy.get_param("~match_ratio", 0.78))
         self.min_matches = int(rospy.get_param("~min_matches", 25))
@@ -212,30 +228,41 @@ class RGBDFailsafeVO:
         if self.mode not in ("VI_LIDAR_FAILED", "IMU_ONLY_BRIDGE", "LV_IMU_FAILED"):
             return
         try:
-            d = self.bridge.imgmsg_to_cv2(msg, desired_encoding="16UC1")
-        except Exception:
+            if msg.encoding == "32FC1":
+                # ZED X publishes registered metric depth as float32 metres.
+                d = self.bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+                if d.dtype != np.float32:
+                    d = np.asarray(d, dtype=np.float32)
+            elif msg.encoding == "16UC1":
+                # Legacy RealSense bags publish integer millimetres.
+                d = self.bridge.imgmsg_to_cv2(msg, desired_encoding="16UC1")
+            else:
+                rospy.logwarn_throttle(
+                    5.0, "[FAILSAFE RGBD] unsupported depth encoding %s", msg.encoding)
+                return
+        except Exception as exc:
+            rospy.logwarn_throttle(5.0, "[FAILSAFE RGBD] depth conversion failed: %s", exc)
             return
-        # RGB and depth are produced by the same RealSense hardware clock.
-        # The sensor adapter already computes the authoritative camera->ROS/bag
-        # clock offset for RGB. Reuse EXACTLY that offset for depth instead of
-        # estimating a second one from callback receipt time (which varied by
-        # 90-113 ms under CPU load and could reject every RGB-D frame).
+        # Some devices use a separate camera clock. In that mode the adapter's
+        # single shared offset is applied to both RGB and depth. ZED X bags use
+        # source stamps already aligned with LiDAR, so their profile preserves
+        # both stamps without estimating an offset from callback arrival time.
         now = rospy.Time.now()
-        shared_offset = rospy.get_param("/fast_livo2/camera_clock_offset_sec", None)
         depth_stamp = msg.header.stamp
-        if shared_offset is not None and not msg.header.stamp.is_zero():
-            self.depth_clock_offset = rospy.Duration.from_sec(float(shared_offset))
-            depth_stamp = msg.header.stamp + self.depth_clock_offset
-        elif not now.is_zero() and not msg.header.stamp.is_zero():
-            # Startup-only fallback before the first RGB frame establishes the
-            # shared clock parameter. It is replaced as soon as the adapter has
-            # published the authoritative offset.
-            candidate_offset = now - msg.header.stamp
-            if (self.depth_clock_offset is None or
-                    candidate_offset.to_sec() < self.depth_clock_offset.to_sec()):
-                self.depth_clock_offset = candidate_offset
-            depth_stamp = msg.header.stamp + self.depth_clock_offset
-        elif depth_stamp.is_zero():
+        if self.depth_rebase_with_shared_offset:
+            shared_offset = rospy.get_param("/fast_livo2/camera_clock_offset_sec", None)
+            if shared_offset is not None and not msg.header.stamp.is_zero():
+                self.depth_clock_offset = rospy.Duration.from_sec(float(shared_offset))
+                depth_stamp = msg.header.stamp + self.depth_clock_offset
+            elif not now.is_zero() and not msg.header.stamp.is_zero():
+                # Startup fallback for legacy devices until the RGB adapter
+                # publishes its shared clock offset.
+                candidate_offset = now - msg.header.stamp
+                if (self.depth_clock_offset is None or
+                        candidate_offset.to_sec() < self.depth_clock_offset.to_sec()):
+                    self.depth_clock_offset = candidate_offset
+                depth_stamp = msg.header.stamp + self.depth_clock_offset
+        if depth_stamp.is_zero():
             depth_stamp = now
 
         with self.lock:
@@ -246,6 +273,15 @@ class RGBDFailsafeVO:
             self.depth_buffer.append((depth_stamp, now, depth_copy))
 
     def aligned_depth(self, depth, color_shape, K, dist):
+        if (self.registered_depth and depth.shape[:2] == color_shape[:2] and
+                np.allclose(self.Rdc, np.eye(3), atol=1e-5) and
+                np.linalg.norm(self.tdc) < 1e-5):
+            aligned = depth.astype(np.float32, copy=True)
+            aligned *= self.depth_scale
+            np.nan_to_num(aligned, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+            aligned[(aligned < self.depth_min) |
+                    (aligned > self.depth_max)] = 0.0
+            return aligned if np.count_nonzero(aligned) >= 500 else None
         # Avoid cv2.rgbd.registerDepth here. OpenCV 4.2's native RGB-D path has
         # repeatedly segfaulted this ROS Python process on the recorded
         # RealSense stream (exit -11). Use the same explicit projection path as
@@ -256,6 +292,7 @@ class RGBDFailsafeVO:
         if stride > 1:
             sampled = depth[::stride, ::stride]
             z = sampled.astype(np.float32) * self.depth_scale
+            z = np.nan_to_num(z, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
             valid = (z >= self.depth_min) & (z <= self.depth_max)
             if np.count_nonzero(valid) < 500:
                 return None
@@ -264,6 +301,7 @@ class RGBDFailsafeVO:
             uu, vv = np.meshgrid(u_axis, v_axis)
         else:
             z = depth.astype(np.float32) * self.depth_scale
+            z = np.nan_to_num(z, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
             valid = (z >= self.depth_min) & (z <= self.depth_max)
             if np.count_nonzero(valid) < 500:
                 return None
@@ -373,10 +411,39 @@ class RGBDFailsafeVO:
             rospy.logwarn_throttle(1.0, "[FAILSAFE RGBD] aligned depth unavailable")
             return
 
-        kp, desc = self.orb.detectAndCompute(gray, None)
-        if desc is None or len(kp) < self.min_matches:
-            rospy.logwarn_throttle(1.0, "[FAILSAFE RGBD] insufficient ORB features: %d", 0 if kp is None else len(kp))
-            return
+        good = None
+        if self.use_klt:
+            # Tracking only, no descriptor network and no second VIO filter.
+            # Refresh corners only at startup or after a low-quality track.
+            if self.prev_gray is None or not self.prev_kp:
+                self.klt_reset(gray, aligned, stamp)
+                return
+            old = np.asarray([k.pt for k in self.prev_kp], dtype=np.float32).reshape(-1,1,2)
+            cur, valid, _ = cv2.calcOpticalFlowPyrLK(
+                self.prev_gray, gray, old, None, winSize=(21,21), maxLevel=3,
+                criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT,20,.02))
+            if cur is None:
+                self.klt_reset(gray,aligned,stamp)
+                return
+            back, valid_back, _ = cv2.calcOpticalFlowPyrLK(
+                gray,self.prev_gray,cur,None,winSize=(21,21),maxLevel=3)
+            if back is None:
+                self.klt_reset(gray,aligned,stamp)
+                return
+            mask = ((valid[:,0]>0)&(valid_back[:,0]>0)&
+                    (np.linalg.norm(old[:,0,:]-back[:,0,:],axis=1)<self.klt_fb_error))
+            indices=np.flatnonzero(mask)
+            if len(indices)<max(self.min_matches,self.klt_min_tracks):
+                self.klt_reset(gray,aligned,stamp)
+                return
+            kp=[cv2.KeyPoint(float(pt[0]),float(pt[1]),8.0) for pt in cur[indices,0,:]]
+            good=[cv2.DMatch(int(idx),int(j),0.0) for j,idx in enumerate(indices)]
+            desc=np.zeros((len(kp),32),np.uint8)
+        else:
+            kp, desc = self.orb.detectAndCompute(gray, None)
+            if desc is None or len(kp) < self.min_matches:
+                rospy.logwarn_throttle(1.0, "[FAILSAFE RGBD] insufficient ORB features: %d", 0 if kp is None else len(kp))
+                return
 
         if self.prev_desc is None:
             self.prev_gray, self.prev_depth_color = gray, aligned
@@ -391,14 +458,15 @@ class RGBDFailsafeVO:
             self.prev_stamp, self.prev_kp, self.prev_desc = stamp, kp, desc
             return
 
-        knn = self.matcher.knnMatch(self.prev_desc, desc, k=2)
-        good = []
-        for m_n in knn:
-            if len(m_n) != 2:
-                continue
-            m, n = m_n
-            if m.distance < self.ratio * n.distance:
-                good.append(m)
+        if good is None:
+            knn = self.matcher.knnMatch(self.prev_desc, desc, k=2)
+            good = []
+            for m_n in knn:
+                if len(m_n) != 2:
+                    continue
+                m, n = m_n
+                if m.distance < self.ratio * n.distance:
+                    good.append(m)
         if len(good) < self.min_matches:
             rospy.logwarn_throttle(1.0, "[FAILSAFE RGBD] insufficient descriptor matches: %d", len(good))
             self.prev_gray, self.prev_depth_color = gray, aligned
@@ -585,6 +653,18 @@ class RGBDFailsafeVO:
 
         self.prev_gray, self.prev_depth_color = gray, aligned
         self.prev_stamp, self.prev_kp, self.prev_desc = stamp, kp, desc
+
+    def klt_reset(self, gray, aligned, stamp):
+        # Evenly spaced corner detection is much cheaper than ORB descriptor
+        # extraction. Spatial mask avoids concentrating all tracks on the road.
+        corners=cv2.goodFeaturesToTrack(gray,maxCorners=self.klt_max_corners,
+                  qualityLevel=.015,minDistance=11,blockSize=5,
+                  useHarrisDetector=False)
+        kp=[] if corners is None else [
+            cv2.KeyPoint(float(v[0]),float(v[1]),8.0) for v in corners[:,0,:]]
+        self.prev_gray,self.prev_depth_color=gray,aligned
+        self.prev_stamp,self.prev_kp=stamp,kp
+        self.prev_desc=np.zeros((len(kp),32),np.uint8) if kp else None
 
 
 if __name__ == "__main__":

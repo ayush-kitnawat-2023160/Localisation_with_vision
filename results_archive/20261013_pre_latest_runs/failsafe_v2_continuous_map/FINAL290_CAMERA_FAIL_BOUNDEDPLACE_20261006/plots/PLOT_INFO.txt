@@ -1,8 +1,0 @@
-run=FINAL290_CAMERA_FAIL_BOUNDEDPLACE_20261006
-sensor=camera
-failure_start_s=125.0
-failure_end_s=165.0
-global_samples=2841
-gicp_fixes=284
-max_global_step_m=1.175148
-end_3d_error_m=1.240137

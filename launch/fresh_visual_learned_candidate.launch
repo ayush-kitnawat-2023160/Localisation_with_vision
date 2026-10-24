@@ -1,0 +1,19 @@
+<launch>
+  <!-- EXPERIMENTAL GPS-FREE visual + LiDAR hypothesis observer. NEVER /pose. -->
+  <arg name="calibration_file" default="$(find fast_livo2)/config/calibration/zedx_current.yaml"/>
+  <arg name="worker_url" default="http://127.0.0.1:18090/localize"/>
+  <arg name="camera_topic" default="/zedx/zed_node/left/image_rect_color"/>
+  <arg name="offline_replay_all_modes" default="false"/>
+  <arg name="observe_lidar_mh" default="true"/>
+  <rosparam command="load" file="$(arg calibration_file)"/>
+  <node pkg="fast_livo2" type="fresh_visual_global_learned_bridge.py" name="fresh_learned_visual" output="screen">
+    <param name="camera_topic" value="$(arg camera_topic)"/>
+    <param name="worker_url" value="$(arg worker_url)"/>
+    <param name="always_evaluate_shadow" value="$(arg offline_replay_all_modes)"/>
+    <param name="confirm_frames" value="3"/>
+    <param name="query_hz" value="1.0"/>
+    <param name="request_timeout_sec" value="1.5"/>
+    <param name="max_sensor_age_sec" value="1.5"/>
+  </node>
+  <node if="$(arg observe_lidar_mh)" pkg="fast_livo2" type="fresh_multimodal_candidate_observer.py" name="fresh_multimodal_candidate_observer" output="screen"/>
+</launch>

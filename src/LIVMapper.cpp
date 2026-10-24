@@ -94,6 +94,9 @@ void LIVMapper::readParameters(ros::NodeHandle &nh)
   nh.param<bool>("vio/inverse_composition_en", inverse_composition_en, false);
   nh.param<int>("vio/max_iterations", max_iterations, 5);
   nh.param<bool>("vio/gated_visual_fastpath_enable", gated_visual_fastpath_enable_, false);
+  nh.param<bool>("vio/preserve_lidar_cadence", preserve_lidar_cadence_, false);
+  nh.param<bool>("vio/diagnostic_force_lidar_sync_en",
+                 diagnostic_force_lidar_sync_en_, false);
   nh.param<double>("vio/img_point_cov", IMG_POINT_COV, 100);
   nh.param<bool>("vio/raycast_en", raycast_en, false);
   nh.param<bool>("vio/exposure_estimate_en", exposure_estimate_en, true);
@@ -711,7 +714,11 @@ void LIVMapper::initializeComponents()
   vio_manager->state = &_state;
   vio_manager->state_propagat = &state_propagat;
   vio_manager->max_iterations = max_iterations;
+  vio_manager->minimum_visual_update_points =
+      std::max(1, std::max(min_visual_constraints_, healthy_visual_min_points_));
   vio_manager->gated_visual_fastpath_enable = gated_visual_fastpath_enable_;
+  ros::param::param<bool>("/vio/diagnostic_tracking_only_en",
+                          vio_manager->diagnostic_tracking_only_en, false);
   vio_manager->img_point_cov = IMG_POINT_COV;
   vio_manager->normal_en = normal_en;
   vio_manager->inverse_composition_en = inverse_composition_en;
@@ -1246,11 +1253,11 @@ void LIVMapper::handleVIO()
   const int required_visual_points =
       std::max(min_visual_constraints_, healthy_visual_min_points_);
   const bool visual_support_strong =
-      vio_manager->total_points >= required_visual_points;
+      vio_manager->safe_visual_points >= required_visual_points;
   visual_constraints_ok_ = visual_update_accepted && visual_support_strong;
   {
     const double support = std::min(
-        1.0, static_cast<double>(std::max(0, vio_manager->total_points)) /
+        1.0, static_cast<double>(std::max(0, vio_manager->safe_visual_points)) /
                  static_cast<double>(std::max(4 * required_visual_points, 1)));
     double target = (visual_update_accepted || !allow_visual_state_update)
                         ? support : 0.0;
@@ -3694,6 +3701,16 @@ bool LIVMapper::syncVisionImuFallback(LidarMeasureGroup &meas)
 bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
 {
   updateFailsafeHealthAndMode();
+  const bool preserve_lidar_cadence = preserve_lidar_cadence_ && !p_imu->imu_need_init;
+
+  if (diagnostic_force_lidar_sync_en_)
+  {
+    // Profiling control: camera callback/adapter remain active but do not
+    // split LiDAR or IMU into image-timed LIVO propagation cycles.
+    // This intentionally disables photometric tracking and corrections;
+    // it is a scheduler-only control, not a production sensor mode.
+    return syncLidarImuFallback(meas);
+  }
 
   if (failsafe_enable_ && failsafe_initialized_)
   {
@@ -3726,7 +3743,8 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
 
   const bool runtime_imu_available = !(failsafe_enable_ && failsafe_initialized_ &&
                                        failsafe_mode_ == FailsafeMode::LV_IMU_FAILED);
-  if (lid_raw_data_buffer.empty() && lidar_en) return false;
+  if (lid_raw_data_buffer.empty() && lidar_en &&
+      !(preserve_lidar_cadence && slam_mode_ == LIVO && !meas.pcl_proc_next->empty())) return false;
   if (img_buffer.empty() && img_en) return false;
   if (imu_buffer.empty() && imu_en && runtime_imu_available) return false;
 
@@ -3793,7 +3811,10 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
     case VIO:
     {
       // printf("!!! meas.lio_vio_flg: %d \n", meas.lio_vio_flg);
-      double img_capture_time = img_time_buffer.front() + exposure_time_init;
+      const bool have_image = !img_buffer.empty() && !img_time_buffer.empty();
+      double img_capture_time = have_image
+                                    ? img_time_buffer.front() + exposure_time_init
+                                    : std::numeric_limits<double>::infinity();
       /*** has img topic, but img topic timestamp larger than lidar end time,
        * process lidar topic. After LIO update, the meas.lidar_frame_end_time
        * will be refresh. ***/
@@ -3802,21 +3823,61 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
       // printf("[ Data Cut ] last_lio_update_time: %lf \n",
       // meas.last_lio_update_time);
 
-      double lid_newest_time = lid_header_time_buffer.back() + lid_raw_data_buffer.back()->points.back().curvature / double(1000);
+      double pending_end = meas.last_lio_update_time;
+      if (preserve_lidar_cadence)
+        for (const auto& point : meas.pcl_proc_next->points)
+          pending_end = std::max(pending_end, meas.last_lio_update_time + point.curvature / 1000.0);
+      double lid_newest_time = pending_end;
+      if (!lid_raw_data_buffer.empty() && !lid_raw_data_buffer.back()->points.empty())
+      {
+        const auto &newest_scan = lid_raw_data_buffer.back()->points;
+        const auto newest_point = std::max_element(
+            newest_scan.begin(), newest_scan.end(),
+            [](const PointType &a, const PointType &b) { return a.curvature < b.curvature; });
+        lid_newest_time = lid_header_time_buffer.back() + newest_point->curvature / 1000.0;
+      }
+      lid_newest_time = std::max(lid_newest_time, pending_end);
+      double lio_target_time = img_capture_time;
+      if (preserve_lidar_cadence) {
+        if (!have_image) lio_target_time = std::numeric_limits<double>::infinity();
+        if (pending_end > meas.last_lio_update_time + 1.0e-5)
+          lio_target_time = std::min(lio_target_time, pending_end);
+        if (!lid_raw_data_buffer.empty() && !lid_raw_data_buffer.front()->points.empty()) {
+          const auto &next_scan = lid_raw_data_buffer.front()->points;
+          const auto last_point = std::max_element(
+              next_scan.begin(), next_scan.end(),
+              [](const PointType &a, const PointType &b) { return a.curvature < b.curvature; });
+          const double scan_end = lid_header_time_buffer.front() + last_point->curvature / 1000.0;
+          if (scan_end > meas.last_lio_update_time + 1.0e-5)
+            lio_target_time = std::min(lio_target_time, scan_end);
+        }
+      }
       double imu_newest_time = runtime_imu_available && !imu_buffer.empty()
                                    ? imu_buffer.back()->header.stamp.toSec()
                                    : std::numeric_limits<double>::infinity();
 
-      if (img_capture_time < meas.last_lio_update_time + 0.00001)
+      if (have_image && img_capture_time < meas.last_lio_update_time + 0.00001)
       {
-        img_buffer.pop_front();
-        img_time_buffer.pop_front();
-        ROS_ERROR("[ Data Cut ] Throw one image frame! \n");
+        const double image_lag = meas.last_lio_update_time - img_capture_time;
+        {
+          std::lock_guard<std::mutex> lock(mtx_buffer);
+          if (!img_buffer.empty()) img_buffer.pop_front();
+          if (!img_time_buffer.empty()) img_time_buffer.pop_front();
+        }
+        ROS_WARN_THROTTLE(1.0,
+                          "[VIO] Dropping stale image %.1f ms behind LiDAR state",
+                          image_lag * 1000.0);
         return false;
       }
 
-      if (img_capture_time > lid_newest_time ||
-          (runtime_imu_available && img_capture_time > imu_newest_time))
+      if (preserve_lidar_cadence && !std::isfinite(lio_target_time)) return false;
+      if (preserve_lidar_cadence &&
+          (lio_target_time > lid_newest_time + 1.0e-5 ||
+           (runtime_imu_available && lio_target_time > imu_newest_time + 1.0e-5)))
+        return false;
+      if (!preserve_lidar_cadence &&
+          (img_capture_time > lid_newest_time ||
+           (runtime_imu_available && img_capture_time > imu_newest_time)))
       {
         // ROS_ERROR("lost first camera frame");
         // printf("img_capture_time, lid_newest_time, imu_newest_time: %lf , %lf
@@ -3829,7 +3890,9 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
       // printf("[ Data Cut ] LIO \n");
       // printf("[ Data Cut ] img_capture_time: %lf \n", img_capture_time);
       m.imu.clear();
-      m.lio_time = img_capture_time;
+      m.lio_time = lio_target_time;
+      livo_image_due_ = !preserve_lidar_cadence ||
+                         (have_image && lio_target_time >= img_capture_time - 1.0e-5);
       mtx_buffer.lock();
       while (runtime_imu_available && !imu_buffer.empty())
       {
@@ -3844,8 +3907,22 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
       mtx_buffer.unlock();
       sig_buffer.notify_all();
 
-      *(meas.pcl_proc_cur) = *(meas.pcl_proc_next);
-      PointCloudXYZI().swap(*meas.pcl_proc_next);
+      if (preserve_lidar_cadence) {
+        PointCloudXYZI pending;
+        pending.swap(*meas.pcl_proc_next);
+        meas.pcl_proc_cur->clear();
+        const double cut_ms = (m.lio_time - meas.last_lio_update_time) * 1000.0;
+        for (auto point : pending.points) {
+          if (point.curvature <= cut_ms) meas.pcl_proc_cur->push_back(point);
+          else {
+            point.curvature -= cut_ms;
+            meas.pcl_proc_next->push_back(point);
+          }
+        }
+      } else {
+        *(meas.pcl_proc_cur) = *(meas.pcl_proc_next);
+        PointCloudXYZI().swap(*meas.pcl_proc_next);
+      }
 
       int lid_frame_num = lid_raw_data_buffer.size();
       int max_size = meas.pcl_proc_cur->size() + 24000 * lid_frame_num;
@@ -3855,7 +3932,7 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
 
       while (!lid_raw_data_buffer.empty())
       {
-        if (lid_header_time_buffer.front() > img_capture_time) break;
+        if (lid_header_time_buffer.front() > m.lio_time) break;
         auto pcl(lid_raw_data_buffer.front()->points);
         double frame_header_time(lid_header_time_buffer.front());
         float max_offs_time_ms = (m.lio_time - frame_header_time) * 1000.0f;
@@ -3863,7 +3940,8 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
         for (int i = 0; i < pcl.size(); i++)
         {
           auto pt = pcl[i];
-          if (pcl[i].curvature < max_offs_time_ms)
+          if (pcl[i].curvature < max_offs_time_ms ||
+              (preserve_lidar_cadence && pcl[i].curvature <= max_offs_time_ms))
           {
             pt.curvature += (frame_header_time - meas.last_lio_update_time) * 1000.0f;
             meas.pcl_proc_cur->points.push_back(pt);
@@ -3878,6 +3956,8 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
         lid_header_time_buffer.pop_front();
       }
 
+      if (preserve_lidar_cadence)
+        std::sort(meas.pcl_proc_cur->points.begin(), meas.pcl_proc_cur->points.end(), time_list);
       meas.measures.push_back(m);
       meas.lio_vio_flg = LIO;
       // meas.last_lio_update_time = m.lio_time;
@@ -3891,6 +3971,12 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
     case LIO:
     {
       double img_capture_time = img_time_buffer.front() + exposure_time_init;
+      if (!livo_image_due_) {
+        // The preceding event was a LiDAR scan boundary. Keep the image queued
+        // and consume the next chronological event before running its VIO.
+        meas.lio_vio_flg = VIO;
+        return false;
+      }
       meas.lio_vio_flg = VIO;
       // printf("[ Data Cut ] VIO \n");
       meas.measures.clear();

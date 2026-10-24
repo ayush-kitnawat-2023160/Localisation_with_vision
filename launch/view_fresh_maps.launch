@@ -1,0 +1,15 @@
+<launch>
+  <!-- Run with ROS Noetic, /data/maps must be a mounted folder in Docker. -->
+  <arg name="lidar_pcd" default="/data/maps/campus_full_raw_v2/global_map.pcd"/>
+  <arg name="visual_pcd" default="/data/maps/campus_full_raw_v2/visual/landmarks_preview.pcd"/>
+  <arg name="rviz" default="true"/>
+  <node pkg="pcl_ros" type="pcd_to_pointcloud" name="fresh_lidar_map"
+        args="$(arg lidar_pcd) 1.0 _frame_id:=map" output="screen">
+    <remap from="cloud_pcd" to="/fresh_maps/lidar"/>
+  </node>
+  <node pkg="pcl_ros" type="pcd_to_pointcloud" name="fresh_visual_map"
+        args="$(arg visual_pcd) 1.0 _frame_id:=map" output="screen">
+    <remap from="cloud_pcd" to="/fresh_maps/visual"/>
+  </node>
+  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="rviz" output="screen"/>
+</launch>

@@ -113,6 +113,9 @@ public:
   // Runtime failsafe state. Static img_en/lidar_en/imu_en remain configuration
   // flags and are never changed to represent a runtime sensor fault.
   bool failsafe_enable_ = true;
+  // Offline diagnostic only: preserve camera subscriptions but schedule
+  // 10 Hz LiDAR/IMU updates instead of image-timed LIVO event splitting.
+  bool diagnostic_force_lidar_sync_en_ = false;
   bool failsafe_initialized_ = false;
   bool visual_constraints_ok_ = true;
   bool lidar_rejoin_guard_ = false;
@@ -132,6 +135,8 @@ public:
   // consecutive strong visual frames are observed again.
   bool healthy_visual_gate_enable_ = true;
   bool gated_visual_fastpath_enable_ = false;
+  bool preserve_lidar_cadence_ = false;
+  bool livo_image_due_ = true;
   // On this recorded cart, direct healthy-mode photometric residuals accumulate
   // a slow pose bias even when every individual correction is small. Keep them
   // available for bootstrap and LiDAR-loss recovery, but let LIO own healthy

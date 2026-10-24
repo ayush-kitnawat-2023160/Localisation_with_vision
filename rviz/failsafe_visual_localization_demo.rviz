@@ -1,0 +1,88 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+  - Class: rviz/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz/Grid
+      Enabled: true
+      Name: Ground grid
+      Plane: XY
+      Plane Cell Count: 30
+      Cell Size: 2
+      Reference Frame: <Fixed Frame>
+    - Class: rviz/PointCloud2
+      Enabled: true
+      Name: PCD LiDAR map (saved reference)
+      Topic: /fresh_maps/lidar
+      Queue Size: 1
+      Style: Points
+      Size (Pixels): 2
+      Color Transformer: FlatColor
+      Color: 190; 190; 190
+      Use Fixed Frame: true
+    - Class: rviz/PointCloud2
+      Enabled: true
+      Name: Visual RGB-D landmarks
+      Topic: /fresh_maps/visual
+      Queue Size: 1
+      Style: Points
+      Size (Pixels): 4
+      Color Transformer: FlatColor
+      Color: 30; 210; 255
+      Use Fixed Frame: true
+    - Class: rviz/PoseWithCovariance
+      Enabled: true
+      Name: XFeat global visual fixes
+      Topic: /fast_livo2/visual_global_candidate
+      Shape: Arrow
+      Color: 255; 40; 40
+    - Class: rviz/Path
+      Enabled: true
+      Name: XFeat global candidate path
+      Topic: /failsafe_rviz/global_visual_path
+      Color: 255; 40; 40
+      Line Style: Lines
+      Line Width: 0.08
+      Pose Style: None
+    - Class: rviz/Odometry
+      Enabled: true
+      Name: RGB-D plus gyro odometry (visualization aligned)
+      Topic: /failsafe_rviz/visual_odom_map_candidate
+      Keep: 1
+      Shape:
+        Value: Axes
+    - Class: rviz/Path
+      Enabled: true
+      Name: RGB-D plus gyro odometry path
+      Topic: /failsafe_rviz/visual_odom_path
+      Color: 40; 255; 80
+      Line Style: Lines
+      Line Width: 0.06
+      Pose Style: None
+    - Class: rviz/Image
+      Enabled: true
+      Name: Live bag camera
+      Image Topic: /zedx/zed_node/left/image_rect_color
+      Queue Size: 2
+      Transport Hint: raw
+  Enabled: true
+  Global Options:
+    Background Color: 32; 32; 32
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: failsafe_visual_localization_demo
+  Tools:
+    - Class: rviz/Interact
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Distance: 90
+      Focal Point: {X: 35, Y: -10, Z: 0}
+      Pitch: 1.15
+      Yaw: 0.8
+      Value: Orbit (rviz)

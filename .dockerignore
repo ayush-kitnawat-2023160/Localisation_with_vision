@@ -9,6 +9,20 @@ __pycache__/
 .step3_*_build/
 .stability1_baseline/
 results/
+results_archive/
+release/
+reports/
+outputs/
+data/
+datasets/
+rosbag/
+maps/
+*.mcap
+*.db3
+*.pcd
+*.ply
+*.npz
+*.h5
 archive/
 # Runtime map databases/artifacts are mounted into validation containers and
 # are not part of the ROS package build. Keeping them out of the Docker build

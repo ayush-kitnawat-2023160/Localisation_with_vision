@@ -1,27 +1,29 @@
 <launch>
   <arg name="use_sim_time" default="true"/>
   <arg name="config_file" default="$(find fast_livo2)/config/failsafe_rosbag.yaml"/>
-  <arg name="calibration_file" default="$(find fast_livo2)/config/calibration/one_full_loop_lidar102.yaml"/>
-  <arg name="lidar_topic" default="/lidar102/velodyne_points"/>
+  <arg name="calibration_file" default="$(find fast_livo2)/config/calibration/zedx_current.yaml"/>
+  <arg name="lidar_topic" default="/lidar103/velodyne_points"/>
   <arg name="imu_topic" default="/mavros/imu/data"/>
-  <arg name="camera_topic" default="/camera/color/image_raw"/>
-  <arg name="camera_timestamp_mode" default="rebase"/>
+  <arg name="camera_topic" default="/zedx/zed_node/left/image_rect_color"/>
+  <arg name="camera_timestamp_mode" default="preserve"/>
   <arg name="max_camera_hz" default="5.0"/>
-  <arg name="depth_topic" default="/camera/depth/image_rect_raw"/>
-  <arg name="depth_info_topic" default="/camera/depth/camera_info"/>
-  <!-- The prebuilt PCD is part of localization, not an optional debug node.
-       It keeps the FAST-LIVO2 local frame tied to the campus/lanelet frame and
-       becomes the absolute measurement source during single-sensor failures. -->
-  <arg name="map_localizer_enable" default="true"/>
+  <arg name="depth_topic" default="/zedx/zed_node/depth/depth_registered"/>
+  <arg name="depth_info_topic" default="/zedx/zed_node/depth/camera_info"/>
+  <!-- Fresh-data default: DO NOT load a saved map implicitly.
+       Global localization is opt-in after a new map is supplied and validated. -->
+  <arg name="map_localizer_enable" default="false"/>
   <!-- Relative degraded-mode motion front-ends are independent of the
        absolute saved-map localizer. This lets us validate the persistent
        FAST-LIVO2 ESIKF + single-sensor failsafes in the local frame before
        introducing any PCD/global-map correction. -->
   <arg name="failsafe_frontends_enable" default="true"/>
+  <!-- Optional *legacy* RGB-D frontend. The new independent KLT+PnP+gyro
+       candidate must not run alongside this competing fallback estimator. -->
+  <arg name="rgbd_frontend_enable" default="$(arg failsafe_frontends_enable)"/>
   <arg name="map_localizer_mode" default="localize"/>
-  <arg name="map_path" default="/results/failsafe_saved_map.pcd"/>
+  <arg name="map_path" default=""/>
   <arg name="visual_voxel_map_path" default=""/>
-  <arg name="map_localizer_config" default="$(find fast_livo2)/config/map_failsafe_recorded_cart.yaml"/>
+  <arg name="map_localizer_config" default="$(find fast_livo2)/config/map_failsafe_zedx_looooo.yaml"/>
   <arg name="visual_place_enable" default="false"/>
   <arg name="visual_map_image_dir" default=""/>
   <arg name="visual_map_trajectory" default=""/>
@@ -34,6 +36,17 @@
   <arg name="map_initial_pose_topic" default="/initialpose"/>
 
   <arg name="drop_sensor" default="none"/>
+  <!-- Shadow/live path BYPASSES the bag-only failure-injector process.
+       Existing offline failure-injection launch defaults remain unchanged. -->
+  <arg name="failure_injector_enable" default="true"/>
+  <arg name="adapter_output_lidar_topic" default="/fast_livo2/source/lidar"/>
+  <arg name="adapter_output_imu_topic" default="/fast_livo2/source/imu"/>
+  <arg name="adapter_output_camera_topic" default="/fast_livo2/source/image"/>
+  <arg name="lidar_point_time_unit" default="auto_offline"/>
+  <!-- Guard against fallback map updates feeding an unverified absolute
+       correction into the one FAST-LIVO2 ESIKF. In the shadow deployment
+       this is FALSE; leave existing experimental launch defaults unchanged. -->
+  <arg name="external_map_correction_enable" default="true"/>
   <arg name="drop_start" default="30.0"/>
   <arg name="drop_duration" default="10.0"/>
   <arg name="record_trajectory" default="true"/>
@@ -45,12 +58,22 @@
   <arg name="visual_place_launch_prefix" default="nice -n 12"/>
   <arg name="failsafe_frontend_launch_prefix" default="nice -n 10"/>
   <arg name="rgbd_frontend_launch_prefix" default="$(arg failsafe_frontend_launch_prefix)"/>
-  <arg name="map_primary_on_imu_failure" default="true"/>
-  <arg name="map_primary_on_lidar_failure" default="true"/>
+  <arg name="rgbd_color_rebase_with_shared_offset" default="false"/>
+  <arg name="rgbd_use_klt" default="false"/>
+  <arg name="rgbd_process_every_n" default="3"/>
+  <!-- Map-free rejoin must not wait for a non-existent global map lock. -->
+  <arg name="map_primary_on_imu_failure" default="false"/>
+  <arg name="map_primary_on_lidar_failure" default="false"/>
 
   <param name="use_sim_time" type="bool" value="$(arg use_sim_time)"/>
   <rosparam command="load" file="$(arg config_file)"/>
   <rosparam command="load" file="$(arg calibration_file)"/>
+  <!-- Must be AFTER loading the tuning YAML; otherwise its failsafe/ block
+       silently overwrites the false setting passed from a parent launch. -->
+  <param name="failsafe/map_correction_enable" type="bool"
+         value="$(arg external_map_correction_enable)"/>
+  <!-- Preserve native LIVO scan cadence and acquisition-time deskew order. -->
+  <param name="vio/preserve_lidar_cadence" type="bool" value="true"/>
   <!-- FAST-LIVO2's single ESIKF always remains the active estimator.  The
        saved PCD supplies its global anchor and degraded-mode corrections. -->
   <param name="failsafe/map_depth_primary_on_lidar_failure"
@@ -67,15 +90,16 @@
     <param name="source_lidar_topic" value="$(arg lidar_topic)"/>
     <param name="source_imu_topic" value="$(arg imu_topic)"/>
     <param name="source_camera_topic" value="$(arg camera_topic)"/>
-    <param name="output_lidar_topic" value="/fast_livo2/source/lidar"/>
-    <param name="output_imu_topic" value="/fast_livo2/source/imu"/>
-    <param name="output_camera_topic" value="/fast_livo2/source/image"/>
+    <param name="output_lidar_topic" value="$(arg adapter_output_lidar_topic)"/>
+    <param name="output_imu_topic" value="$(arg adapter_output_imu_topic)"/>
+    <param name="output_camera_topic" value="$(arg adapter_output_camera_topic)"/>
     <param name="camera_timestamp_mode" value="$(arg camera_timestamp_mode)"/>
+    <param name="lidar_time_unit" value="$(arg lidar_point_time_unit)"/>
     <param name="max_camera_hz" value="$(arg max_camera_hz)"/>
   </node>
 
   <!-- Drop exactly one stream at runtime; all other messages are unchanged. -->
-  <node pkg="fast_livo2" type="fast_livo2_failure_injector.py"
+  <node if="$(arg failure_injector_enable)" pkg="fast_livo2" type="fast_livo2_failure_injector.py"
         name="fast_livo2_failure_injector" output="screen" required="true">
     <param name="source_lidar_topic" value="/fast_livo2/source/lidar"/>
     <param name="source_imu_topic" value="/fast_livo2/source/imu"/>
@@ -168,24 +192,26 @@
   <!-- Metric RGB-D frame-to-frame odometry for degraded operation.
        ORB feature tracking + depth-backed PnP supplies short-term SE(3);
        the saved-map localizer remains the absolute correction source. -->
-  <node if="$(arg failsafe_frontends_enable)" pkg="fast_livo2"
+  <node if="$(arg rgbd_frontend_enable)" pkg="fast_livo2"
         type="rgbd_failsafe_vo.py" name="fast_livo2_rgbd_failsafe_vo"
         output="screen" launch-prefix="$(arg rgbd_frontend_launch_prefix)">
     <rosparam command="load" file="$(arg map_localizer_config)"/>
     <!-- FAST-LIVO2 itself intentionally receives a CPU-throttled image stream.
-         The LiDAR-loss RGB-D frontend is dormant while healthy, so when it is
-         activated it can safely use the original 30-Hz RealSense RGB stream.
-         This is required by its 0.025-0.18 s frame-to-frame VO window. -->
+         The LiDAR-loss RGB-D frontend is dormant while healthy, so it can use
+         the source camera stream when activated. -->
     <param name="color_topic" value="$(arg camera_topic)"/>
-    <param name="color_rebase_with_shared_offset" value="true"/>
+    <param name="color_rebase_with_shared_offset"
+           value="$(arg rgbd_color_rebase_with_shared_offset)"/>
     <!-- Failure-only RGB-D VO: queue_size=1 + serialized processing already
          bounds CPU. Do not intentionally discard frames and then reject the
          resulting loaded-CPU cadence. -->
-    <param name="process_every_n" value="3"/>
+    <param name="process_every_n" value="$(arg rgbd_process_every_n)"/>
+    <param name="use_klt" value="$(arg rgbd_use_klt)"/>
     <param name="max_frame_dt" value="1.50"/>
     <param name="depth_sync_max_age" value="0.08"/>
     <param name="depth_buffer_size" value="64"/>
     <param name="depth_alignment_stride" value="2"/>
+    <param name="registered_depth" value="true"/>
     <param name="depth_topic" value="$(arg depth_topic)"/>
     <param name="depth_info_topic" value="$(arg depth_info_topic)"/>
     <param name="failsafe_mode_topic" value="/fast_livo2/failsafe_mode"/>

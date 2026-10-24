@@ -1,0 +1,149 @@
+<launch>
+  <!-- Offline development stack, not permitted to publish /pose by default.
+       One FAST-LIVO2 ESIKF. Global LiDAR fixes reuse its odom and deskewed
+       LiDAR stream through the existing ScanContext+GICP Step3 matcher.
+       Visual relocalization is bounded by that LiDAR anchor and GPS metadata.
+       IMPORTANT: map_db uses raw LiDAR-frame keyframes and T_map_lidar.
+       The Step3 matcher explicitly converts verified T_map_lidar to T_map_body
+       using the LiDAR->base extrinsic; DO NOT premultiply body frames.
+  -->
+  <arg name="use_sim_time" default="true"/>
+  <arg name="lidar_topic" default="/lidar103/velodyne_points"/>
+  <arg name="imu_topic" default="/mavros/imu/data"/>
+  <arg name="camera_topic" default="/zedx/zed_node/left/image_rect_color"/>
+  <arg name="depth_topic" default="/zedx/zed_node/depth/depth_registered"/>
+  <arg name="map_db" default="/data/maps/campus_full_raw_v2"/>
+  <arg name="visual_map_dir" default="/data/maps/campus_full_raw_v2/visual"/>
+  <arg name="calibration_file" default="$(find fast_livo2)/config/calibration/zedx_current.yaml"/>
+  <arg name="publish_legacy_pose" default="false"/>
+  <arg name="pose_authority_shadow_enable" default="true"/>
+  <arg name="fused_map_pose_topic" default="/fast_livo2/fused_map_pose"/>
+  <arg name="fused_global_status_topic" default="/fast_livo2/fused_global_status"/>
+  <arg name="rgbd_frontend_enable" default="true"/>
+  <arg name="failure_injector_enable" default="true"/>
+  <arg name="adapter_output_lidar_topic" default="/fast_livo2/source/lidar"/>
+  <arg name="adapter_output_imu_topic" default="/fast_livo2/source/imu"/>
+  <arg name="adapter_output_camera_topic" default="/fast_livo2/source/image"/>
+  <arg name="lidar_point_time_unit" default="auto_offline"/>
+  <arg name="external_map_correction_enable" default="true"/>
+  <arg name="lidar_global_enable" default="true"/>
+  <arg name="visual_global_enable" default="true"/>
+  <!-- Explicit offline-only switches. Leave GPS off until the map and fix
+       covariance are independently verified; never substitute GPS for GICP. -->
+  <arg name="lidar_gps_soft_prior_enable" default="false"/>
+  <arg name="lidar_gps_topic" default="/mavros/global_position/raw/fix"/>
+  <!-- Rate limiting mitigates a pose spike but can leave large map-position
+       lag after reacquisition. Not a substitute for invalid/untrusted status. -->
+  <arg name="lidar_pose_relative_limit_enable" default="false"/>
+  <!-- Experimental GPS-independent multi-hypothesis LiDAR relocalizer.
+       Defaults off until cold-start and recovery continuity are validated. -->
+  <arg name="lidar_mh_enable" default="false"/>
+  <arg name="lidar_mh_required_hits" default="3"/>
+  <arg name="lidar_mh_max_reanchor_m" default="4.0"/>
+  <arg name="lidar_mh_reacquire_hz" default="0.25"/>
+  <arg name="lidar_trajectory_yaw_fit_enable" default="false"/>
+  <!-- Learned visual candidates require an independently started local Torch
+       worker. These flags are OFF by default and do not enable /pose. -->
+  <arg name="visual_learned_enable" default="false"/>
+  <arg name="visual_shadow_query_healthy" default="false"/>
+  <arg name="visual_learned_worker_url" default="http://127.0.0.1:18091/localize"/>
+  <arg name="lidar_mh_visual_seed_enable" default="false"/>
+  <!-- Review-only, never applies a map reset or publishes /pose. -->
+  <arg name="lidar_handoff_review_enable" default="false"/>
+
+  <include file="$(find fast_livo2)/launch/fast_livo2_zedx_fresh_rosbag.launch">
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+    <arg name="lidar_topic" value="$(arg lidar_topic)"/>
+    <arg name="imu_topic" value="$(arg imu_topic)"/>
+    <arg name="camera_topic" value="$(arg camera_topic)"/>
+    <arg name="depth_topic" value="$(arg depth_topic)"/>
+    <arg name="calibration_file" value="$(arg calibration_file)"/>
+    <arg name="map_localizer_enable" value="false"/>
+    <arg name="rgbd_frontend_enable" value="$(arg rgbd_frontend_enable)"/>
+    <arg name="failure_injector_enable" value="$(arg failure_injector_enable)"/>
+    <arg name="adapter_output_lidar_topic" value="$(arg adapter_output_lidar_topic)"/>
+    <arg name="adapter_output_imu_topic" value="$(arg adapter_output_imu_topic)"/>
+    <arg name="adapter_output_camera_topic" value="$(arg adapter_output_camera_topic)"/>
+    <arg name="lidar_point_time_unit" value="$(arg lidar_point_time_unit)"/>
+    <arg name="external_map_correction_enable" value="$(arg external_map_correction_enable)"/>
+    <arg name="record_trajectory" value="false"/>
+  </include>
+
+  <!-- FAST-LOCALIZATION-style SC map acquisition/reacquisition, without
+       its redundant FAST-LIO2 estimator.  This is the existing failsafe
+       Step3 SC+GICP implementation, not a verbatim upstream FAST-LOCALIZATION
+       binary. Its map database was exported from the same bag/calibration. -->
+  <node if="$(arg lidar_global_enable)" pkg="fast_livo2"
+        type="step3_global_acquirer" name="fresh_lidar_global"
+        output="screen">
+    <param name="map_db" value="$(arg map_db)"/>
+    <param name="gps_soft_prior_enable" value="$(arg lidar_gps_soft_prior_enable)"/>
+    <param name="mh_enable" value="$(arg lidar_mh_enable)"/>
+    <param name="mh_required_hits" value="$(arg lidar_mh_required_hits)"/>
+    <param name="mh_max_reanchor_m" value="$(arg lidar_mh_max_reanchor_m)"/>
+    <param name="mh_visual_seed_enable" value="$(arg lidar_mh_visual_seed_enable)"/>
+    <param name="gps_topic" value="$(arg lidar_gps_topic)"/>
+    <param name="gps_preference_radius_m" value="25.0"/>
+    <param name="gps_max_age_sec" value="0.65"/>
+    <param name="gps_max_covariance_m2" value="100.0"/>
+    <param name="tracking_publish_relative_motion_limit_enable" value="$(arg lidar_pose_relative_limit_enable)"/>
+    <param name="tracking_publish_relative_correction_speed_mps" value="1.5"/>
+    <param name="tracking_publish_relative_yaw_rate_deg_s" value="12.0"/>
+    <param name="lidar_topic" value="/fast_livo2/input/lidar"/>
+    <param name="fast_odom_topic" value="/aft_mapped_to_init"/>
+    <param name="query_hz" value="1.0"/>
+    <param name="source_voxel" value="0.35"/>
+    <param name="descriptor_candidates" value="12"/>
+    <param name="geometric_candidates" value="3"/>
+    <param name="gicp_max_fitness" value="0.15"/>
+    <param name="required_consistent" value="3"/>
+    <param name="tracking_hz" value="1.0"/>
+    <param name="tracking_candidates" value="3"/>
+    <param name="tracking_submap_cache_slots" value="12"/>
+    <param name="tracking_gicp_max_iterations" value="16"/>
+    <param name="tracking_global_reacquire_hz" value="$(arg lidar_mh_reacquire_hz)"/>
+    <param name="tracking_update_anchor" value="true"/>
+    <param name="trajectory_yaw_fit_enable" value="$(arg lidar_trajectory_yaw_fit_enable)"/>
+  </node>
+
+  <!-- GPS-free image retrieval -> XFeat/PnP 3-frame candidate publisher,
+       plus diagnostic-only LiDAR hypothesis observer. Disable the legacy
+       visual_global_enable when using this to avoid duplicate publishers. -->
+  <include if="$(arg visual_learned_enable)"
+           file="$(find fast_livo2)/launch/fresh_visual_learned_candidate.launch">
+    <arg name="camera_topic" value="$(arg camera_topic)"/>
+    <arg name="worker_url" value="$(arg visual_learned_worker_url)"/>
+    <arg name="offline_replay_all_modes" value="$(arg visual_shadow_query_healthy)"/>
+    <arg name="observe_lidar_mh" value="true"/>
+    <arg name="calibration_file" value="$(arg calibration_file)"/>
+  </include>
+  <node if="$(arg lidar_handoff_review_enable)" pkg="fast_livo2"
+        type="fresh_safe_handoff_review.py" name="fresh_safe_handoff_review"
+        output="screen"/>
+
+  <node if="$(arg visual_global_enable)" pkg="fast_livo2"
+        type="fresh_visual_global_localizer.py" name="fresh_visual_global_localizer"
+        output="screen">
+    <param name="visual_map" value="$(arg visual_map_dir)"/>
+    <param name="camera_topic" value="$(arg camera_topic)"/>
+    <param name="query_hz" value="0.85"/>
+    <param name="local_radius_m" value="15.0"/>
+    <param name="max_local_radius_m" value="65.0"/>
+    <param name="max_candidates" value="28"/>
+    <param name="min_inliers" value="18"/>
+    <param name="confirm_frames" value="2"/>
+    <param name="max_age_sec" value="0.40"/>
+  </node>
+
+  <!-- Sole candidate-to-pose authority; no /pose to alive_dev until manually
+       enabled after map/Lanelet and four-mode heldout validation. -->
+  <node if="$(arg pose_authority_shadow_enable)" pkg="fast_livo2" type="fresh_pose_authority.py"
+        name="fresh_pose_authority" output="screen">
+    <param name="fused_pose_topic" value="$(arg fused_map_pose_topic)"/>
+    <param name="fused_status_topic" value="$(arg fused_global_status_topic)"/>
+    <param name="publish_legacy_pose" value="$(arg publish_legacy_pose)"/>
+    <param name="require_mh_trusted_status" value="$(arg lidar_mh_enable)"/>
+    <param name="max_anchor_translation_rate_mps" value="1.5"/>
+    <param name="max_anchor_yaw_rate_deg_s" value="12.0"/>
+  </node>
+</launch>

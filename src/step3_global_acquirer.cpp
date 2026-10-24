@@ -3,6 +3,7 @@
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <nav_msgs/Odometry.h>
 #include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/NavSatFix.h>
 #include <std_msgs/String.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/point_cloud.h>
@@ -19,6 +20,8 @@
 #include <deque>
 #include <list>
 #include <fstream>
+#include <sstream>
+#include <iomanip>
 #include <limits>
 #include <mutex>
 #include <atomic>
@@ -90,6 +93,41 @@ class Step3GlobalAcquirer {
   Step3GlobalAcquirer():nh_(),pnh_("~"){
     pnh_.param<std::string>("map_db",map_db_,std::string()); pnh_.param<std::string>("lidar_topic",lidar_topic_,"/fast_livo2/input/lidar"); pnh_.param<std::string>("fast_odom_topic",odom_topic_,"/aft_mapped_to_init");
     pnh_.param("query_hz",query_hz_,2.0); pnh_.param("source_voxel",source_voxel_,0.35); pnh_.param("descriptor_candidates",descriptor_candidates_,12); pnh_.param("descriptor_threshold",descriptor_threshold_,0.34); pnh_.param("geometric_candidates",geometric_candidates_,4); pnh_.param("gicp_max_correspondence",gicp_corr_,2.0); pnh_.param("gicp_max_fitness",gicp_fitness_,0.12); pnh_.param("consistency_translation",consistency_translation_,1.0); pnh_.param("consistency_yaw_deg",consistency_yaw_deg_,5.0); pnh_.param("required_consistent",required_consistent_,2);
+    // OFF by default. GPS is only a bounded preference among LiDAR candidates;
+    // it never produces a pose, relaxes a geometry gate, or vetoes global search.
+    pnh_.param("gps_soft_prior_enable",gps_soft_prior_enable_,false);
+    pnh_.param<std::string>("gps_topic",gps_topic_,"/mavros/global_position/raw/fix");
+    pnh_.param("gps_max_age_sec",gps_max_age_sec_,0.65);
+    pnh_.param("gps_max_covariance_m2",gps_max_covariance_m2_,100.0);
+    pnh_.param("gps_preference_radius_m",gps_preference_radius_m_,25.0);
+    pnh_.param("gps_sc_penalty_per_m",gps_sc_penalty_per_m_,0.0010);
+    pnh_.param("gps_fitness_penalty_per_m",gps_fitness_penalty_per_m_,0.0010);
+    pnh_.param("mh_enable",mh_enable_,false);
+    pnh_.param("mh_scancontext_candidates",mh_sc_candidates_,16);
+    pnh_.param("mh_geometric_candidates",mh_geometric_candidates_,5);
+    pnh_.param("mh_max_hypotheses",mh_max_hypotheses_,4);
+    pnh_.param("mh_required_hits",mh_required_hits_,3);
+    pnh_.param("mh_max_fitness",mh_max_fitness_,0.15);
+    pnh_.param("mh_association_xy_m",mh_association_xy_m_,3.0);
+    pnh_.param("mh_association_yaw_deg",mh_association_yaw_deg_,18.0);
+    pnh_.param("mh_stale_sec",mh_stale_sec_,7.0);
+    pnh_.param("mh_ambiguity_separation_m",mh_ambiguity_separation_m_,6.0);
+    pnh_.param("mh_candidate_diversity_m",mh_candidate_diversity_m_,8.0);
+    pnh_.param("mh_min_fitness_advantage",mh_min_fitness_advantage_,0.035);
+    pnh_.param("mh_max_reanchor_m",mh_max_reanchor_m_,4.0);
+    pnh_.param("mh_max_reanchor_yaw_deg",mh_max_reanchor_yaw_deg_,15.0);
+    pnh_.param("mh_max_auto_pose_resume_gap_sec",mh_max_auto_pose_resume_gap_sec_,2.5);
+    // OFF by default; visual pose is a search proposal, never a direct
+    // estimator update or authority. It must pass GICP and MH scan consensus.
+    pnh_.param("mh_visual_seed_enable",mh_visual_seed_enable_,false);
+    pnh_.param("mh_visual_seed_max_age_sec",mh_visual_seed_max_age_sec_,1.4);
+    pnh_.param("mh_visual_seed_max_xy_variance_m2",mh_visual_seed_max_xy_variance_m2_,16.0);
+    pnh_.param<std::string>("mh_visual_candidate_topic",mh_visual_candidate_topic_,
+                             "/fast_livo2/visual_global_candidate");
+    if(mh_enable_ && gps_soft_prior_enable_){
+      ROS_WARN("[STEP3 MH] ignoring gps_soft_prior_enable: multi-hypothesis experiment is LiDAR/odometry ONLY");
+      gps_soft_prior_enable_=false;
+    }
     pnh_.param("tracking_hz",tracking_hz_,1.0);
     pnh_.param("tracking_candidates",tracking_candidates_,3);
     pnh_.param("tracking_submap_cache_slots",tracking_submap_cache_slots_,0);
@@ -295,9 +333,13 @@ class Step3GlobalAcquirer {
     pnh_.param("trajectory_yaw_fit_filter_alpha",trajectory_yaw_fit_filter_alpha_,1.0);
     std::vector<double> t,r; nh_.getParam("calibration/lidar_to_base_translation",t); nh_.getParam("calibration/lidar_to_base_rotation",r); if(t.size()!=3||r.size()!=9) throw std::runtime_error("missing calibration/lidar_to_base"); body_from_lidar_=Eigen::Isometry3d::Identity(); for(int i=0;i<3;++i)body_from_lidar_.translation()[i]=t[i];for(int i=0;i<3;++i)for(int j=0;j<3;++j)body_from_lidar_.linear()(i,j)=r[3*i+j];
     loadDb();
+    if(gps_soft_prior_enable_)loadGpsKeyframes();
     lock_pub_=nh_.advertise<geometry_msgs::PoseStamped>("/fast_livo2/step3_global_lock",1,true); pose_pub_=nh_.advertise<geometry_msgs::PoseStamped>("/fast_livo2/step3_global_pose",5,true); status_pub_=nh_.advertise<std_msgs::String>("/fast_livo2/step3_status",1,true);
     tracking_pub_=nh_.advertise<geometry_msgs::PoseWithCovarianceStamped>("/fast_livo2/step3_tracking_correction",3);
     tracking_map_pose_pub_=nh_.advertise<geometry_msgs::PoseStamped>("/fast_livo2/step3_gicp_map_pose",3);
+    mh_status_pub_=nh_.advertise<std_msgs::String>("/fast_livo2/step3_mh_status",3,true);
+    mh_recovery_candidate_pub_=nh_.advertise<geometry_msgs::PoseWithCovarianceStamped>(
+        "/fast_livo2/step3_mh_recovery_candidate",3);
     failover_initial_pose_pub_=nh_.advertise<geometry_msgs::PoseWithCovarianceStamped>("/fast_livo2/step3_failover_initialpose",1,true);
     odom_sub_=nh_.subscribe(odom_topic_,500,&Step3GlobalAcquirer::odomCb,this);
     mode_sub_=nh_.subscribe("/fast_livo2/failsafe_mode",10,&Step3GlobalAcquirer::modeCb,this);
@@ -306,10 +348,43 @@ class Step3GlobalAcquirer {
     // slower than the sensor, so queuing scans makes the tracker operate on
     // stale geometry and blocks odometry callbacks at 1x playback.
     lidar_sub_=nh_.subscribe(lidar_topic_,1,&Step3GlobalAcquirer::lidarCb,this);
+    if(mh_enable_ && mh_visual_seed_enable_){
+      mh_visual_sub_=nh_.subscribe(mh_visual_candidate_topic_,6,
+                                  &Step3GlobalAcquirer::mhVisualCb,this);
+      ROS_WARN("[STEP3 MH] EXPERIMENTAL visual-guided GICP proposals ON; GPS unused, visual never directly changes anchor");
+    }
+    if(gps_soft_prior_enable_){
+      gps_sub_=nh_.subscribe(gps_topic_,10,&Step3GlobalAcquirer::gpsCb,this);
+      ROS_INFO("[STEP3 GPS] enabled soft coarse candidate preference, radius=%.1fm; LiDAR-only fallback always retained",gps_preference_radius_m_);
+    }
     publishStatus("SEARCHING");
   }
  private:
-  ros::NodeHandle nh_,pnh_; ros::Subscriber odom_sub_,lidar_sub_,mode_sub_,depth_map_sub_;ros::Publisher lock_pub_,pose_pub_,status_pub_,tracking_pub_,tracking_map_pose_pub_,failover_initial_pose_pub_;
+  ros::NodeHandle nh_,pnh_; ros::Subscriber odom_sub_,lidar_sub_,mode_sub_,depth_map_sub_,gps_sub_,mh_visual_sub_;ros::Publisher lock_pub_,pose_pub_,status_pub_,tracking_pub_,tracking_map_pose_pub_,failover_initial_pose_pub_,mh_status_pub_,mh_recovery_candidate_pub_;
+  bool mh_enable_=false;
+  int mh_sc_candidates_=16,mh_geometric_candidates_=5,mh_max_hypotheses_=4,mh_required_hits_=3;
+  double mh_max_fitness_=0.15,mh_association_xy_m_=3.0,mh_association_yaw_deg_=18.0,mh_stale_sec_=7.0;
+  double mh_ambiguity_separation_m_=6.0,mh_min_fitness_advantage_=0.035,mh_candidate_diversity_m_=8.0;
+  double mh_max_reanchor_m_=4.0,mh_max_reanchor_yaw_deg_=15.0;
+  double mh_max_auto_pose_resume_gap_sec_=2.5;
+  // Unlike last_published_global_stamp_ (updated by the predictor even while
+  // publishing is blocked), this timestamp advances ONLY on a real message.
+  std::atomic<double> mh_last_actual_pose_publication_sec_{0.0};
+  bool mh_visual_seed_enable_=false,mh_visual_seed_valid_=false;
+  double mh_visual_seed_max_age_sec_=1.4,mh_visual_seed_max_xy_variance_m2_=16.0;
+  std::string mh_visual_candidate_topic_;
+  std::mutex mh_visual_mtx_;
+  ros::Time mh_visual_last_stamp_;
+  Eigen::Isometry3d mh_visual_last_map_body_=Eigen::Isometry3d::Identity();
+  std::atomic<bool> mh_pose_untrusted_{false};
+  bool gps_soft_prior_enable_=false, gps_valid_=false;
+  std::string gps_topic_;
+  double gps_max_age_sec_=0.65,gps_max_covariance_m2_=100.0,gps_preference_radius_m_=25.0;
+  double gps_sc_penalty_per_m_=0.0010,gps_fitness_penalty_per_m_=0.0010;
+  std::mutex gps_mtx_;
+  ros::Time gps_stamp_;
+  double gps_lat_=0.0,gps_lon_=0.0;
+  std::vector<std::pair<double,double>> keyframe_gps_;
   std::string map_db_,lidar_topic_,odom_topic_; double query_hz_=2,source_voxel_=.35,descriptor_threshold_=.34,gicp_corr_=2,gicp_fitness_=.12,consistency_translation_=1,consistency_yaw_deg_=5;int descriptor_candidates_=12,geometric_candidates_=4,required_consistent_=2;
   double tracking_hz_=1.0,tracking_max_fitness_=0.20,tracking_max_translation_innovation_=3.0,tracking_max_yaw_innovation_deg_=10.0;
   bool tracking_healthy_motion_consistency_gate_=false;
@@ -497,6 +572,18 @@ class Step3GlobalAcquirer {
   Eigen::Isometry3d global_reacquire_last_map_body_=Eigen::Isometry3d::Identity();
   ros::Time global_reacquire_last_map_stamp_;
   int global_reacquire_last_id_=-1;
+  // Used only by lidarCb under lidar_job_mtx_. Each hypothesis represents a
+  // distinct map<-FAST transform supported by temporally separate LiDAR scans.
+  struct MhTrack {
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+    Eigen::Isometry3d anchor=Eigen::Isometry3d::Identity();
+    Eigen::Isometry3d map_body=Eigen::Isometry3d::Identity();
+    ros::Time last_stamp;
+    int id=-1,hits=0;
+    double mean_fitness=1e9;
+  };
+  std::vector<MhTrack,Eigen::aligned_allocator<MhTrack>> mh_tracks_;
+  ros::Time mh_last_stamp_;
   std::atomic<bool> fast_local_unstable_{false};
   std::atomic<bool> fast_local_recovery_ready_{false};
   bool fast_local_prev_valid_=false;
@@ -692,6 +779,58 @@ class Step3GlobalAcquirer {
   }
   void loadDb(){
     if(map_db_.empty())throw std::runtime_error("~map_db empty"); std::ifstream pf(map_db_+"/pose.json"); if(!pf)throw std::runtime_error("pose.json missing"); double tx,ty,tz,qw,qx,qy,qz; while(pf>>tx>>ty>>tz>>qw>>qx>>qy>>qz){Eigen::Quaterniond q(qw,qx,qy,qz);q.normalize();Eigen::Isometry3d T=Eigen::Isometry3d::Identity();T.linear()=q.toRotationMatrix();T.translation()<<tx,ty,tz;map_poses_.push_back(T);} std::ifstream f(map_db_+"/cache/scan_context.bin",std::ios::binary); if(!f)throw std::runtime_error("scan_context.bin missing"); char magic[8];uint32_t n,r,s;f.read(magic,8);f.read((char*)&n,4);f.read((char*)&r,4);f.read((char*)&s,4);if(std::string(magic,8)!="SCDBV001"||r!=kRings||s!=kSectors||n!=map_poses_.size())throw std::runtime_error("scan context cache mismatch");desc_.resize(n);for(uint32_t i=0;i<n;++i){for(auto&x:desc_[i].v)f.read((char*)&x,sizeof(double));for(int rr=0;rr<kRings;++rr){double sum=0;for(int c=0;c<kSectors;++c)sum+=desc_[i].v[rr*kSectors+c];desc_[i].ring[rr]=sum/kSectors;}}ROS_INFO("[STEP3] loaded %zu map descriptors",desc_.size());
+  }
+  void loadGpsKeyframes(){
+    std::ifstream f(map_db_+"/keyframes.csv");
+    if(!f){ROS_WARN("[STEP3 GPS] missing keyframes.csv: LiDAR-only retrieval");return;}
+    std::string line;
+    std::getline(f,line); // exporter contract: gps_lat index 10, gps_lon 11
+    std::vector<std::pair<double,double>> coordinates;
+    while(std::getline(f,line)){
+      std::stringstream ss(line);std::vector<std::string> cols;std::string c;
+      while(std::getline(ss,c,','))cols.push_back(c);
+      double lat=std::numeric_limits<double>::quiet_NaN(),lon=lat;
+      try{if(cols.size()>=12){lat=std::stod(cols[10]);lon=std::stod(cols[11]);}}catch(...){}
+      coordinates.push_back({lat,lon});
+    }
+    if(coordinates.size()!=map_poses_.size()){
+      ROS_ERROR("[STEP3 GPS] keyframe GPS size mismatch %zu vs %zu; GPS disabled",
+                coordinates.size(),map_poses_.size());return;
+    }
+    keyframe_gps_=std::move(coordinates);
+    ROS_INFO("[STEP3 GPS] %zu map GPS entries loaded; only soft preference, no map pose authority",
+             keyframe_gps_.size());
+  }
+  void gpsCb(const sensor_msgs::NavSatFixConstPtr& m){
+    if(!m || m->status.status<sensor_msgs::NavSatStatus::STATUS_FIX ||
+       !std::isfinite(m->latitude)||!std::isfinite(m->longitude)||
+       std::abs(m->latitude)>90||std::abs(m->longitude)>180)return;
+    double vx=m->position_covariance[0],vy=m->position_covariance[4];
+    if(!std::isfinite(vx)||!std::isfinite(vy)||vx<=0||vy<=0||
+       vx>gps_max_covariance_m2_||vy>gps_max_covariance_m2_)return;
+    std::lock_guard<std::mutex> lock(gps_mtx_);
+    gps_stamp_=m->header.stamp;gps_lat_=m->latitude;gps_lon_=m->longitude;gps_valid_=true;
+  }
+  std::vector<double> gpsDistancesAt(const ros::Time& stamp){
+    if(!gps_soft_prior_enable_||keyframe_gps_.size()!=map_poses_.size())return {};
+    double lat,lon;ros::Time last;
+    {std::lock_guard<std::mutex> lock(gps_mtx_);
+      if(!gps_valid_)return {};
+      lat=gps_lat_;lon=gps_lon_;last=gps_stamp_;}
+    const double age=(stamp-last).toSec();
+    if(!std::isfinite(age)||age < -0.2 || age>gps_max_age_sec_)return {};
+    const double longitude_scale=111320.0*std::cos(lat*M_PI/180.0);
+    std::vector<double> distances;distances.reserve(keyframe_gps_.size());
+    for(const auto& p:keyframe_gps_){
+      if(!std::isfinite(p.first)||!std::isfinite(p.second))distances.push_back(1e6);
+      else distances.push_back(std::hypot((p.first-lat)*111132.0,
+                                          (p.second-lon)*longitude_scale));
+    }
+    return distances;
+  }
+  double gpsPenalty(int id,const std::vector<double>& ds,double per_m,double cap) const{
+    if(ds.empty()||id<0||id>=(int)ds.size())return 0.0;
+    return std::min(cap,std::max(0.0,ds[id]-gps_preference_radius_m_)*per_m);
   }
   void modeCb(const std_msgs::String::ConstPtr& m){
     if(!m)return;
@@ -1449,7 +1588,14 @@ class Step3GlobalAcquirer {
         publish_previous_local_stamp_=m->header.stamp;
         publish_previous_local_valid_=true;
       }
-      geometry_msgs::PoseStamped p;p.header.stamp=m->header.stamp;p.header.frame_id="map";p.pose=poseMsg(global_pose);pose_pub_.publish(p);
+      // In MH mode a resumed FAST pose following a multi-second outage may be
+      // physically held for one callback. Do NOT stamp that hold as a fresh
+      // confident global pose. Fail closed until an independently verified
+      // map/FAST re-anchor explicitly clears the untrusted flag.
+      if(!mh_enable_||(!mh_pose_untrusted_.load()&&!fast_local_unstable_.load())){
+        geometry_msgs::PoseStamped p;p.header.stamp=m->header.stamp;p.header.frame_id="map";p.pose=poseMsg(global_pose);pose_pub_.publish(p);
+        if(mh_enable_)mh_last_actual_pose_publication_sec_.store(m->header.stamp.toSec());
+      }else ROS_WARN_THROTTLE(1.0,"[STEP3 MH] Global pose withheld: unresolved branch or quarantined FAST local odometry");
     }
   }
   bool odomAt(const ros::Time&t,Eigen::Isometry3d&T){std::lock_guard<std::mutex>l(odom_mtx_);if(odom_.empty())return false;auto it=std::min_element(odom_.begin(),odom_.end(),[&](auto&a,auto&b){return std::abs((a.first-t).toSec())<std::abs((b.first-t).toSec());});if(std::abs((it->first-t).toSec())>.15)return false;T=it->second;return true;}
@@ -1494,6 +1640,215 @@ class Step3GlobalAcquirer {
     Match m;m.id=id;m.sc=0.0;Cloud::Ptr target=submapForId(id);
     if(target->empty())return m;
     pcl::GeneralizedIterativeClosestPoint<PointT,PointT>g;g.setInputSource(q);g.setInputTarget(target);g.setMaximumIterations(std::max(8,std::min(35,tracking_gicp_max_iterations_)));g.setMaxCorrespondenceDistance(gicp_corr_);g.setTransformationEpsilon(1e-5);Cloud unused;g.align(unused,init.matrix().cast<float>());if(!g.hasConverged())return m;m.fitness=g.getFitnessScore(gicp_corr_);Eigen::Isometry3d corr=Eigen::Isometry3d::Identity();corr.matrix()=g.getFinalTransformation().cast<double>();m.map_body=map_poses_[id]*corr;return m;
+  }
+
+  void mhVisualCb(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg){
+    if(!mh_visual_seed_enable_ || !msg || msg->header.stamp.isZero() ||
+       msg->header.frame_id!="map")return;
+    const double cx=msg->pose.covariance[0],cy=msg->pose.covariance[7];
+    if(!std::isfinite(cx)||!std::isfinite(cy)||cx<=0.0||cy<=0.0||
+       cx>mh_visual_seed_max_xy_variance_m2_||cy>mh_visual_seed_max_xy_variance_m2_)return;
+    const auto& p=msg->pose.pose;
+    Eigen::Quaterniond q(p.orientation.w,p.orientation.x,p.orientation.y,p.orientation.z);
+    if(!std::isfinite(q.norm())||q.norm()<0.9||q.norm()>1.1)return;
+    q.normalize();
+    Eigen::Isometry3d camera_candidate=Eigen::Isometry3d::Identity();
+    camera_candidate.linear()=q.toRotationMatrix();
+    camera_candidate.translation()<<p.position.x,p.position.y,p.position.z;
+    if(!camera_candidate.matrix().allFinite())return;
+    std::lock_guard<std::mutex> lock(mh_visual_mtx_);
+    if(mh_visual_seed_valid_ && msg->header.stamp<=mh_visual_last_stamp_)return;
+    mh_visual_last_stamp_=msg->header.stamp;
+    mh_visual_last_map_body_=camera_candidate;
+    mh_visual_seed_valid_=true;
+  }
+
+  // GPS-FREE multi-hypothesis search: propagate each map<-FAST candidate with
+  // local odometry, then verify by independent GICP on successive LiDAR scans.
+  // The bank is accessed only under lidar_job_mtx_.
+  Match mhSelect(const Cloud::Ptr&q,const ros::Time& stamp,const Eigen::Isometry3d& fast_body){
+    Match pending;
+    if(!mh_last_stamp_.isZero()&&stamp<=mh_last_stamp_)return pending;
+    mh_last_stamp_=stamp;
+    mh_tracks_.erase(std::remove_if(mh_tracks_.begin(),mh_tracks_.end(),[&](const MhTrack& h){
+      return (stamp-h.last_stamp).toSec()>mh_stale_sec_;
+    }),mh_tracks_.end());
+    Descriptor dq=makeDescriptor(*q);
+    std::vector<std::pair<double,int>> ring;
+    for(int id=0;id<(int)desc_.size();++id){
+      double d=0;
+      for(int r=0;r<kRings;++r){double e=dq.ring[r]-desc_[id].ring[r];d+=e*e;}
+      ring.push_back({d,id});
+    }
+    const int nr=std::min<int>(std::max(mh_sc_candidates_*3,20),ring.size());
+    if(nr==0)return pending;
+    std::partial_sort(ring.begin(),ring.begin()+nr,ring.end());
+    std::vector<std::tuple<double,int,int>> candidates;
+    for(int k=0;k<nr;++k){
+      const int id=ring[k].second;
+      const auto d=bestDescriptorDistance(dq,desc_[id]);
+      if(d.first<=std::max(0.38,tracking_global_reacquire_descriptor_threshold_))
+        candidates.emplace_back(d.first,id,d.second);
+    }
+    std::sort(candidates.begin(),candidates.end());
+    std::vector<Match> observations;
+    // Scan Context's top entries often come from adjacent keyframes of ONE
+    // road pass. Spend the first GICP budget on spatially distinct map regions
+    // so repeated-road hypotheses are actually considered.
+    std::vector<int> chosen;
+    for(int pass=0;pass<2 && (int)chosen.size()<mh_geometric_candidates_;++pass){
+      for(int k=0;k<(int)candidates.size() && (int)chosen.size()<mh_geometric_candidates_;++k){
+        if(std::find(chosen.begin(),chosen.end(),k)!=chosen.end())continue;
+        const int id=std::get<1>(candidates[k]);
+        bool diverse=true;
+        for(int prev:chosen){
+          const int other=std::get<1>(candidates[prev]);
+          if((map_poses_[id].translation()-map_poses_[other].translation()).head<2>().norm()<
+             mh_candidate_diversity_m_){diverse=false;break;}
+        }
+        if(pass==0 && !diverse)continue;
+        chosen.push_back(k);
+      }
+    }
+    for(int k:chosen){
+      auto [sc,id,shift]=candidates[k];
+      Match x=verify(q,id,shift,sc);
+      ROS_INFO("[STEP3 MH] global candidate id=%d sc=%.3f gicp=%.4f",id,sc,x.fitness);
+      if(x.id>=0&&std::isfinite(x.fitness)&&x.fitness<=mh_max_fitness_&&
+         x.map_body.matrix().allFinite())observations.push_back(x);
+    }
+    // Existing hypotheses remain eligible even if their current descriptor
+    // drops out of the global shortlist during turns or weak geometry.
+    for(const auto& h:mh_tracks_){
+      const Eigen::Isometry3d pred_lidar=h.anchor*fast_body*body_from_lidar_;
+      int best_id=-1;double best=1e12;
+      for(int i=0;i<(int)map_poses_.size();++i){
+        const double xy=(map_poses_[i].translation()-pred_lidar.translation()).head<2>().squaredNorm();
+        const double dyaw=wrap(yawOf(map_poses_[i])-yawOf(pred_lidar));
+        const double score=xy+9.0*dyaw*dyaw;
+        if(score<best){best=score;best_id=i;}
+      }
+      if(best_id<0)continue;
+      Match x=verifyTracking(q,best_id,map_poses_[best_id].inverse()*pred_lidar);
+      ROS_INFO("[STEP3 MH] temporal branch=%d candidate=%d gicp=%.4f",h.id,best_id,x.fitness);
+      if(x.id>=0&&std::isfinite(x.fitness)&&x.fitness<=mh_max_fitness_&&
+         x.map_body.matrix().allFinite())observations.push_back(x);
+    }
+    // Camera-only PnP is NOT fused as a LiDAR pose. A prior, temporally
+    // confirmed ROS image match suggests a map region to TRY with GICP.
+    // Correct the image->scan time offset using relative FAST odometry,
+    // then require independent LiDAR geometric and temporal verification.
+    if(mh_visual_seed_enable_){
+      Eigen::Isometry3d visual_pose=Eigen::Isometry3d::Identity();
+      ros::Time visual_stamp;bool valid=false;
+      {std::lock_guard<std::mutex> lock(mh_visual_mtx_);
+        valid=mh_visual_seed_valid_;
+        if(valid){visual_pose=mh_visual_last_map_body_;visual_stamp=mh_visual_last_stamp_;}}
+      const double age=(stamp-visual_stamp).toSec();
+      if(valid && std::isfinite(age) && age>=-0.15 &&
+         age<=mh_visual_seed_max_age_sec_){
+        Eigen::Isometry3d visual_fast_body=Eigen::Isometry3d::Identity();
+        if(odomAt(visual_stamp,visual_fast_body)){
+          const Eigen::Isometry3d predicted_lidar=
+            visual_pose*visual_fast_body.inverse()*fast_body*body_from_lidar_;
+          int visual_keyframe=-1;double nearest_score=1e12;
+          for(int i=0;i<(int)map_poses_.size();++i){
+            const double xy=(map_poses_[i].translation()-predicted_lidar.translation()).head<2>().squaredNorm();
+            const double yaw=wrap(yawOf(map_poses_[i])-yawOf(predicted_lidar));
+            const double score=xy+9.0*yaw*yaw;
+            if(score<nearest_score){nearest_score=score;visual_keyframe=i;}
+          }
+          if(visual_keyframe>=0){
+            const Eigen::Isometry3d seed=
+              map_poses_[visual_keyframe].inverse()*predicted_lidar;
+            const Match x=verifyTracking(q,visual_keyframe,seed);
+            const bool passed=x.id>=0 && std::isfinite(x.fitness) &&
+                              x.fitness<=mh_max_fitness_ &&
+                              x.map_body.matrix().allFinite();
+            ROS_INFO("[STEP3 MH] VISUAL_SEED_GICP keyframe=%d visual_age=%.2fs fitness=%.4f pass=%d (never pose authority)",
+                     visual_keyframe,age,x.fitness,(int)passed);
+            if(passed)observations.push_back(x);
+          }
+        }else ROS_WARN_THROTTLE(1.0,"[STEP3 MH] visual seed lacked time-aligned FAST odometry: skipped");
+      }
+    }
+    std::sort(observations.begin(),observations.end(),[](const Match&a,const Match&b){
+      return a.fitness<b.fitness;
+    });
+    std::vector<bool> updated(mh_tracks_.size(),false);
+    for(const auto& x:observations){
+      const Eigen::Isometry3d measured=x.map_body*body_from_lidar_.inverse();
+      const Eigen::Isometry3d anchor=measured*fast_body.inverse();
+      int nearest=-1;double lowest=1e12;
+      for(int i=0;i<(int)mh_tracks_.size();++i){
+        const Eigen::Isometry3d pred=mh_tracks_[i].anchor*fast_body;
+        const double xy=(pred.translation()-measured.translation()).head<2>().norm();
+        const double yaw=std::abs(wrap(yawOf(pred)-yawOf(measured)))*180/M_PI;
+        if(xy>mh_association_xy_m_||yaw>mh_association_yaw_deg_)continue;
+        if(xy+0.05*yaw<lowest){nearest=i;lowest=xy+0.05*yaw;}
+      }
+      if(nearest>=0){
+        if(updated[nearest])continue; // one independent hit per scan
+        auto& h=mh_tracks_[nearest];
+        h.anchor=anchor;h.map_body=measured;h.last_stamp=stamp;h.id=x.id;
+        h.mean_fitness=0.65*h.mean_fitness+0.35*x.fitness;
+        ++h.hits;updated[nearest]=true;
+      }else if((int)mh_tracks_.size()<mh_max_hypotheses_){
+        MhTrack h;h.anchor=anchor;h.map_body=measured;h.last_stamp=stamp;
+        h.id=x.id;h.hits=1;h.mean_fitness=x.fitness;
+        mh_tracks_.push_back(h);updated.push_back(true);
+      }
+    }
+    std::vector<int> order(mh_tracks_.size());std::iota(order.begin(),order.end(),0);
+    std::sort(order.begin(),order.end(),[&](int a,int b){
+      const auto& x=mh_tracks_[a];const auto& y=mh_tracks_[b];
+      if(x.hits!=y.hits)return x.hits>y.hits;
+      return x.mean_fitness<y.mean_fitness;
+    });
+    // Preserve sub-second ROS sensor timestamps. Default iostream precision
+    // emits e.g. 1.79222e+09, destroying ~1000s of timing information and
+    // causing the cross-sensor observer to reject genuinely fresh hypotheses.
+    std::ostringstream message;
+    message<<std::fixed<<std::setprecision(9)
+           <<"stamp="<<stamp.toSec()<<" hypotheses="<<order.size();
+    for(int i:order){
+      const auto& h=mh_tracks_[i];const auto world=h.anchor*fast_body;
+      message<<" [id="<<h.id<<" hits="<<h.hits<<" fit="<<h.mean_fitness
+             <<" xy="<<world.translation().x()<<","<<world.translation().y()<<"]";
+    }
+    std_msgs::String msg;msg.data=message.str();mh_status_pub_.publish(msg);
+    ROS_INFO_STREAM("[STEP3 MH] "<<msg.data);
+    if(order.empty()||mh_tracks_[order[0]].hits<mh_required_hits_)return pending;
+    const auto& leader=mh_tracks_[order[0]];
+    // A retained hypothesis is only a *prediction* until this scan provides
+    // a new geometrically verified update. Previously the MH bank could keep
+    // emitting CONFIRMED for an old 20-hit leader with no new GICP support,
+    // masking the presence of newly discovered alternative branches.
+    if(leader.last_stamp!=stamp){
+      ROS_WARN("[STEP3 MH] NO_FRESH_LEADER_EVIDENCE id=%d hits=%d last=%.6f scan=%.6f: candidate withheld",
+               leader.id,leader.hits,leader.last_stamp.toSec(),stamp.toSec());
+      return pending;
+    }
+    for(size_t j=1;j<order.size();++j){
+      const auto& alt=mh_tracks_[order[j]];
+      if(alt.hits<2)continue;
+      const auto pos0=leader.anchor*fast_body,pos1=alt.anchor*fast_body;
+      const double gap=(pos0.translation()-pos1.translation()).head<2>().norm();
+      if(gap>=mh_ambiguity_separation_m_ &&
+         (alt.mean_fitness-leader.mean_fitness<mh_min_fitness_advantage_ ||
+          leader.hits-alt.hits<2)){
+        ROS_WARN("[STEP3 MH] AMBIGUOUS ids=%d,%d separation=%.2fm hits=%d,%d; withholding anchor",
+                 leader.id,alt.id,gap,leader.hits,alt.hits);
+        publishStatus("RELOCALIZING: MH_AMBIGUOUS");
+        return pending;
+      }
+    }
+    Match selected;selected.id=leader.id;selected.fitness=leader.mean_fitness;
+    selected.map_body=leader.map_body*body_from_lidar_; // T_map_lidar
+    ROS_INFO("[STEP3 MH] CONFIRMED id=%d hits=%d fitness=%.4f xy=[%.2f %.2f]",
+             leader.id,leader.hits,leader.mean_fitness,
+             leader.map_body.translation().x(),leader.map_body.translation().y());
+    return selected;
   }
 
   Match searchRouteReacquire(const Cloud::Ptr&q,const ros::Time& stamp){
@@ -1543,6 +1898,7 @@ class Step3GlobalAcquirer {
 
   Match searchGlobalReacquire(const Cloud::Ptr&q,const ros::Time& stamp,const Eigen::Isometry3d& predicted_map_body){
     Descriptor dq=makeDescriptor(*q);
+    const auto gps_dist=gpsDistancesAt(stamp);
     std::vector<std::pair<double,int>> ring;ring.reserve(desc_.size());
     for(int i=0;i<(int)desc_.size();++i){double d=0;for(int r=0;r<kRings;++r){double e=dq.ring[r]-desc_[i].ring[r];d+=e*e;}ring.push_back({d,i});}
     const int nr=std::min<int>(tracking_global_reacquire_descriptor_candidates_,ring.size());
@@ -1551,6 +1907,14 @@ class Step3GlobalAcquirer {
     std::vector<std::tuple<double,int,int>> cand;
     for(int k=0;k<nr;++k){int id=ring[k].second;auto ds=bestDescriptorDistance(dq,desc_[id]);if(ds.first<tracking_global_reacquire_descriptor_threshold_)cand.push_back({ds.first,id,ds.second});}
     std::sort(cand.begin(),cand.end());
+    if(!gps_dist.empty()&&!cand.empty()){
+      std::stable_sort(cand.begin(),cand.end(),[&](const auto& a,const auto& b){
+        const double sa=std::get<0>(a)+gpsPenalty(std::get<1>(a),gps_dist,gps_sc_penalty_per_m_,0.06);
+        const double sb=std::get<0>(b)+gpsPenalty(std::get<1>(b),gps_dist,gps_sc_penalty_per_m_,0.06);
+        return sa<sb;
+      });
+      ROS_INFO_THROTTLE(2.0,"[STEP3 GPS] reacquire: soft candidate rank; closest ranked map GPS=%.1fm, LiDAR global candidates retained",gps_dist[std::get<1>(cand.front())]);
+    }
     Match best_any,best_cont;
     double best_physical_score=std::numeric_limits<double>::infinity();
     const double gap=last_tracking_accept_stamp_.isZero()?1e9:std::max(0.0,(stamp-last_tracking_accept_stamp_).toSec());
@@ -1596,7 +1960,8 @@ class Step3GlobalAcquirer {
         // Only a soft preference for the FAST-predicted position: after a
         // tracking gap FAST can drift, so it must NOT veto good map geometry.
         const double pred_innov=(map_body.translation()-predicted_map_body.translation()).head<2>().norm();
-        const double score=x.fitness+std::max(0.0,tracking_global_reacquire_predicted_pose_weight_)*pred_innov;
+        const double score=x.fitness+std::max(0.0,tracking_global_reacquire_predicted_pose_weight_)*pred_innov+
+          gpsPenalty(id,gps_dist,gps_fitness_penalty_per_m_,0.06);
         if(score<best_physical_score){best_cont=x;best_physical_score=score;}
       }
     }
@@ -1614,8 +1979,10 @@ class Step3GlobalAcquirer {
   }
 
   void runGlobalReacquire(const Cloud::Ptr&q,const ros::Time& stamp,const Eigen::Isometry3d& fast_body,const Eigen::Isometry3d& anchor_snapshot,bool fast_body_valid){
-    Match best=searchGlobalReacquire(q,stamp,anchor_snapshot*fast_body);
+    Match best=mh_enable_&&fast_body_valid?mhSelect(q,stamp,fast_body):
+      (mh_enable_?Match():searchGlobalReacquire(q,stamp,anchor_snapshot*fast_body));
     if(best.id<0||!std::isfinite(best.fitness)||best.fitness>tracking_global_reacquire_max_fitness_){
+      if(mh_enable_){publishStatus("RELOCALIZING: MH_UNTRUSTED");return;}
       global_reacquire_consistent_=0;
       global_reacquire_last_map_valid_=false;
       ++tracking_misses_;
@@ -1624,6 +1991,50 @@ class Step3GlobalAcquirer {
       return;
     }
     const Eigen::Isometry3d map_body_meas=best.map_body*body_from_lidar_.inverse();
+    if(mh_enable_){
+      // A freshly verified multi-scan LiDAR map pose may be useful for an
+      // external STOPPED-VEHICLE reset review even when Step3 cannot resume
+      // its previously published global-pose stream. CANDIDATE ONLY:
+      // never latched, not an EKF update and never a /pose publication.
+      geometry_msgs::PoseWithCovarianceStamped review;
+      review.header.frame_id="map";
+      review.header.stamp=stamp;
+      review.pose.pose=poseMsg(map_body_meas);
+      review.pose.covariance.fill(0.0);
+      review.pose.covariance[0]=4.0;
+      review.pose.covariance[7]=4.0;
+      review.pose.covariance[14]=9.0;
+      review.pose.covariance[21]=0.3;
+      review.pose.covariance[28]=0.3;
+      review.pose.covariance[35]=0.3;
+      mh_recovery_candidate_pub_.publish(review);
+      // An anchor may be geometrically close to a long-propagated FAST pose,
+      // while the last pose ACTUALLY exposed to downstream consumers is tens
+      // of metres behind. Resuming output after such an outage produced an
+      // 11.94m step in a 0.1s publication interval on localization_3.bag.
+      // Never silently reactivate global pose after a long trust gap. An
+      // explicit stopped-vehicle pose-reset/authority handshake is required.
+      const double last_pub=mh_last_actual_pose_publication_sec_.load();
+      const double public_gap=last_pub>0.0?stamp.toSec()-last_pub:0.0;
+      if(last_pub>0.0 && (!std::isfinite(public_gap) ||
+         public_gap>mh_max_auto_pose_resume_gap_sec_)){
+        ROS_ERROR("[STEP3 MH] HANDOFF_REQUIRED after %.2fs WITHOUT published trusted global pose; candidate keyframe=%d GICP=%.4f. NO automatic /pose or map-pose reactivation",
+                  public_gap,best.id,best.fitness);
+        publishStatus("RELOCALIZING: MH_HANDOFF_REQUIRED");
+        return;
+      }
+      // Do not turn a 10–30m branch change into an apparently smooth vehicle
+      // motion. Keep the old anchor unchanged until genuinely safe evidence.
+      const Eigen::Isometry3d predicted=anchor_snapshot*fast_body;
+      const double error=(map_body_meas.translation()-predicted.translation()).head<2>().norm();
+      const double yaw_error=std::abs(wrap(yawOf(map_body_meas)-yawOf(predicted)))*180/M_PI;
+      if(error>mh_max_reanchor_m_||yaw_error>mh_max_reanchor_yaw_deg_){
+        ROS_ERROR("[STEP3 MH] UNSAFE_REANCHOR id=%d error=%.2fm/%.1fdeg limits=%.1fm/%.1fdeg. Keeping last anchor; global pose withheld.",
+                  best.id,error,yaw_error,mh_max_reanchor_m_,mh_max_reanchor_yaw_deg_);
+        publishStatus("RELOCALIZING: MH_UNSAFE_REANCHOR");
+        return;
+      }
+    }
     Eigen::Isometry3d candidate_anchor=Eigen::Isometry3d::Identity();
     if(fast_body_valid)candidate_anchor=map_body_meas*fast_body.inverse();
     if(global_reacquire_last_map_valid_){
@@ -1649,7 +2060,7 @@ class Step3GlobalAcquirer {
     ROS_INFO("[STEP3 GLOBAL-REACQ] verified id=%d fitness=%.4f consistent=%d/%d map_body=[%.2f %.2f %.2f]",
              best.id,best.fitness,global_reacquire_consistent_,tracking_global_reacquire_required_consistent_,
              map_body_meas.translation().x(),map_body_meas.translation().y(),map_body_meas.translation().z());
-    if(global_reacquire_consistent_<tracking_global_reacquire_required_consistent_){publishStatus("RELOCALIZING: verifying");return;}
+    if(!mh_enable_&&global_reacquire_consistent_<tracking_global_reacquire_required_consistent_){publishStatus("RELOCALIZING: verifying");return;}
 
     geometry_msgs::PoseStamped mp;mp.header.stamp=stamp;mp.header.frame_id="map";mp.pose=poseMsg(map_body_meas);tracking_map_pose_pub_.publish(mp);
     updateTrackingMotionModel(map_body_meas,stamp);
@@ -1728,6 +2139,7 @@ class Step3GlobalAcquirer {
     resetTrajectoryFit();
     addTrajectoryFitPair(stamp,fast_body,map_body_meas);
     publishStatus("GLOBAL_REACQUIRED_SMOOTH");
+    if(mh_enable_){mh_tracks_.clear();mh_pose_untrusted_.store(false);}
     ROS_INFO("[STEP3 GLOBAL-REACQ] immediate internal re-anchor %.2fm/%.1fdeg; published smoothing %.2fs id=%d fitness=%.4f",
              correction_norm,yaw_residual_deg,publish_ramp_sec,best.id,best.fitness);
   }
@@ -1766,6 +2178,7 @@ class Step3GlobalAcquirer {
     Cloud::Ptr q=preprocess(m);if(q->size()<150)return;
     Eigen::Isometry3d anchor_snapshot;{std::lock_guard<std::mutex>l(anchor_mtx_);anchor_snapshot=map_from_fast_;}
     if(global_reacquire_mode){
+      if(mh_enable_)mh_pose_untrusted_.store(true);
       // Full-map descriptor + GICP search is deliberately much lower-rate than
       // normal tracking. Recovery must never starve FAST-LIVO2 sensor processing.
       const double global_period=1.0/std::max(0.05,tracking_global_reacquire_hz_);
@@ -2274,9 +2687,47 @@ class Step3GlobalAcquirer {
       return;
     }
     deferred_lidar_.clear();
-    if(!last_query_.isZero()&&(m->header.stamp-last_query_).toSec()<1.0/std::max(.1,query_hz_))return;last_query_=m->header.stamp;Eigen::Isometry3d fast_body;if(!odomAt(m->header.stamp,fast_body)){ROS_WARN_THROTTLE(2,"[STEP3] waiting for time-aligned FAST pose");return;}Cloud::Ptr q=preprocess(m);if(q->size()<150){ROS_WARN("[STEP3] sparse query %zu",q->size());return;}Descriptor dq=makeDescriptor(*q);
+    if(!last_query_.isZero()&&(m->header.stamp-last_query_).toSec()<1.0/std::max(.1,query_hz_))return;last_query_=m->header.stamp;Eigen::Isometry3d fast_body;if(!odomAt(m->header.stamp,fast_body)){ROS_WARN_THROTTLE(2,"[STEP3] waiting for time-aligned FAST pose");return;}Cloud::Ptr q=preprocess(m);if(q->size()<150){ROS_WARN("[STEP3] sparse query %zu",q->size());return;}
+    if(mh_enable_){
+      Match accepted=mhSelect(q,m->header.stamp,fast_body);
+      if(accepted.id<0){publishStatus("SEARCHING: MH_COLLECTING");return;}
+      const Eigen::Isometry3d fast_lidar=fast_body*body_from_lidar_;
+      const Eigen::Isometry3d anchor=accepted.map_body*fast_lidar.inverse();
+      {std::lock_guard<std::mutex> lock(anchor_mtx_);
+        map_from_fast_=anchor;anchored_local_initial_map_fast_=anchor;
+        anchored_local_initial_lock_valid_=true;}
+      last_tracking_id_=accepted.id;last_tracking_accept_stamp_=m->header.stamp;
+      last_tracking_map_body_=accepted.map_body*body_from_lidar_.inverse();
+      last_tracking_map_stamp_=m->header.stamp;last_tracking_map_valid_=true;
+      last_tracking_fast_body_=fast_body;last_tracking_fast_valid_=true;
+      tracking_misses_=0;locked_.store(true);mh_pose_untrusted_.store(false);
+      mh_tracks_.clear();
+      geometry_msgs::PoseStamped lock;
+      lock.header.stamp=m->header.stamp;lock.header.frame_id="map_from_camera_init";
+      lock.pose=poseMsg(anchor);lock_pub_.publish(lock);
+      publishStatus("GLOBAL_LOCKED");
+      ROS_INFO("[STEP3 MH] COLD GLOBAL LOCK keyframe=%d fitness=%.4f",accepted.id,accepted.fitness);
+      return;
+    }
+    Descriptor dq=makeDescriptor(*q);
     std::vector<std::pair<double,int>> ring;ring.reserve(desc_.size());for(int i=0;i<(int)desc_.size();++i){double d=0;for(int r=0;r<kRings;++r){double e=dq.ring[r]-desc_[i].ring[r];d+=e*e;}ring.push_back({d,i});}std::partial_sort(ring.begin(),ring.begin()+std::min<int>(descriptor_candidates_,ring.size()),ring.end());
-    std::vector<std::tuple<double,int,int>> cand;for(int k=0;k<std::min<int>(descriptor_candidates_,ring.size());++k){int id=ring[k].second;auto ds=bestDescriptorDistance(dq,desc_[id]);if(ds.first<descriptor_threshold_)cand.push_back({ds.first,id,ds.second});}std::sort(cand.begin(),cand.end());if(cand.empty()){publishStatus("SEARCHING: no descriptor candidate");return;}Match best;for(int k=0;k<std::min<int>(geometric_candidates_,cand.size());++k){auto [sc,id,sh]=cand[k];Match x=verify(q,id,sh,sc);ROS_INFO("[STEP3] candidate id=%d sc=%.3f gicp=%.4f",id,sc,x.fitness);if(x.fitness<best.fitness)best=x;}if(best.id<0||!std::isfinite(best.fitness)||best.fitness>gicp_fitness_){consistent_=0;publishStatus("SEARCHING: GICP rejected candidates");return;}
+    std::vector<std::tuple<double,int,int>> cand;for(int k=0;k<std::min<int>(descriptor_candidates_,ring.size());++k){int id=ring[k].second;auto ds=bestDescriptorDistance(dq,desc_[id]);if(ds.first<descriptor_threshold_)cand.push_back({ds.first,id,ds.second});}std::sort(cand.begin(),cand.end());if(cand.empty()){publishStatus("SEARCHING: no descriptor candidate");return;}
+    const auto gps_dist=gpsDistancesAt(m->header.stamp);
+    if(!gps_dist.empty())std::stable_sort(cand.begin(),cand.end(),[&](const auto&a,const auto&b){
+      return std::get<0>(a)+gpsPenalty(std::get<1>(a),gps_dist,gps_sc_penalty_per_m_,0.06) <
+             std::get<0>(b)+gpsPenalty(std::get<1>(b),gps_dist,gps_sc_penalty_per_m_,0.06);
+    });
+    Match best;double best_score=std::numeric_limits<double>::infinity();
+    for(int k=0;k<std::min<int>(geometric_candidates_,cand.size());++k){
+      auto [sc,id,sh]=cand[k];Match x=verify(q,id,sh,sc);
+      const double gd=gps_dist.empty()?-1.0:gps_dist[id];
+      ROS_INFO("[STEP3] candidate id=%d sc=%.3f gicp=%.4f gps_distance=%.1fm",id,sc,x.fitness,gd);
+      const double score=x.fitness+gpsPenalty(id,gps_dist,gps_fitness_penalty_per_m_,0.06);
+      if(x.id>=0&&std::isfinite(x.fitness)&&x.fitness<=gicp_fitness_&&score<best_score){
+        best=x;best_score=score;
+      }
+    }
+    if(best.id<0||!std::isfinite(best.fitness)||best.fitness>gicp_fitness_){consistent_=0;publishStatus("SEARCHING: GICP rejected candidates");return;}
     const Eigen::Isometry3d fast_lidar = fast_body * body_from_lidar_;
     Eigen::Isometry3d anchor=best.map_body*fast_lidar.inverse(); if(consistent_>0){Eigen::Isometry3d d=candidate_anchor_.inverse()*anchor;double dt=d.translation().norm(),dy=std::abs(wrap(yawOf(anchor)-yawOf(candidate_anchor_)))*180/M_PI;if(dt>consistency_translation_||dy>consistency_yaw_deg_){ROS_WARN("[STEP3] consistency reset %.2fm %.1fdeg",dt,dy);consistent_=0;}}
     candidate_anchor_=anchor;++consistent_;ROS_INFO("[STEP3] verified id=%d sc=%.3f gicp=%.4f consistent=%d/%d pose=[%.2f %.2f %.2f] yaw=%.1f",best.id,best.sc,best.fitness,consistent_,required_consistent_,best.map_body.translation().x(),best.map_body.translation().y(),best.map_body.translation().z(),yawOf(best.map_body)*180/M_PI);if(consistent_>=required_consistent_){{std::lock_guard<std::mutex>l(anchor_mtx_);map_from_fast_=candidate_anchor_;anchored_local_initial_map_fast_=candidate_anchor_;anchored_local_initial_lock_valid_=true;}last_tracking_id_=best.id;last_tracking_accept_stamp_=m->header.stamp;tracking_misses_=0;global_reacquire_consistent_=0;locked_.store(true);geometry_msgs::PoseStamped lock;lock.header.stamp=m->header.stamp;lock.header.frame_id="map_from_camera_init";lock.pose=poseMsg(map_from_fast_);lock_pub_.publish(lock);publishFailoverSeed(m->header.stamp,map_from_fast_*fast_body);publishStatus("GLOBAL_LOCKED");ROS_INFO("[STEP3] GLOBAL LOCK map<-fast xyz=[%.3f %.3f %.3f] yaw=%.2fdeg keyframe=%d",map_from_fast_.translation().x(),map_from_fast_.translation().y(),map_from_fast_.translation().z(),yawOf(map_from_fast_)*180/M_PI,last_tracking_id_);}

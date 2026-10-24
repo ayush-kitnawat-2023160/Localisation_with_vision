@@ -46,6 +46,16 @@ def main():
     measurement_id = str(rospy.get_param("/calibration/measurement_id", ""))
     if not measurement_id or "REPLACE_ME" in measurement_id:
         raise RuntimeError("calibration/measurement_id is missing or still a placeholder")
+    # The Oct 19 bag profile explicitly sets calibration.ready=true for
+    # offline experimentation although key extrinsics are inherited. Prevent
+    # that boolean from silently unlocking a physical deployment.
+    if not bool(rospy.get_param('/use_sim_time',False)):
+        flagged=('OFFLINE','LEGACY','PROVISIONAL','UNMEASURED','BAG_PROFILE','BAG_ONLY')
+        if any(marker in measurement_id.upper() for marker in flagged):
+            raise RuntimeError('Offline/legacy/provisional calibration is forbidden on a live ROS clock')
+        source=str(rospy.get_param('/camera_imu_fallback/rotation_source','UNSPECIFIED'))
+        if not source.upper().startswith('PHYSICALLY_MEASURED_') or any(marker in source.upper() for marker in flagged):
+            raise RuntimeError('Live cart requires PHYSICALLY_MEASURED_ camera<->IMU rotation provenance')
 
     t_imu_lidar = vector("/calibration/lidar_to_imu_translation", 3)
     r_imu_lidar = rotation("/calibration/lidar_to_imu_rotation")

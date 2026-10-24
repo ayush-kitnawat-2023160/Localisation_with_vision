@@ -4117,9 +4117,19 @@ private:
   {
     if (depth_fx_ <= 0.0 || depth_fy_ <= 0.0) return CloudT::Ptr();
     cv_bridge::CvImageConstPtr cv_ptr;
+    const bool float_depth = msg->encoding == sensor_msgs::image_encodings::TYPE_32FC1;
     try
     {
-      cv_ptr = cv_bridge::toCvShare(msg, sensor_msgs::image_encodings::TYPE_16UC1);
+      if (float_depth)
+        cv_ptr = cv_bridge::toCvShare(msg, sensor_msgs::image_encodings::TYPE_32FC1);
+      else if (msg->encoding == sensor_msgs::image_encodings::TYPE_16UC1)
+        cv_ptr = cv_bridge::toCvShare(msg, sensor_msgs::image_encodings::TYPE_16UC1);
+      else
+      {
+        ROS_WARN_THROTTLE(1.0, "[FAILSAFE MAP] Unsupported depth encoding: %s",
+                          msg->encoding.c_str());
+        return CloudT::Ptr();
+      }
     }
     catch (const cv_bridge::Exception &e)
     {
@@ -4131,11 +4141,19 @@ private:
                    (cv_ptr->image.cols / std::max(1, depth_stride_)));
     for (int v = 0; v < cv_ptr->image.rows; v += std::max(1, depth_stride_))
     {
-      const uint16_t *row = cv_ptr->image.ptr<uint16_t>(v);
       for (int u = 0; u < cv_ptr->image.cols; u += std::max(1, depth_stride_))
       {
-        const uint16_t raw = row[u];
-        if (raw == 0) continue;
+        double raw = 0.0;
+        if (float_depth)
+        {
+          raw = static_cast<double>(cv_ptr->image.ptr<float>(v)[u]);
+          if (!std::isfinite(raw) || raw <= 0.0) continue;
+        }
+        else
+        {
+          raw = static_cast<double>(cv_ptr->image.ptr<uint16_t>(v)[u]);
+          if (raw == 0.0) continue;
+        }
         const double z = raw * depth_scale_;
         if (z < depth_min_m_ || z > depth_max_m_) continue;
         const Eigen::Vector3d p_depth((u - depth_cx_) * z / depth_fx_,

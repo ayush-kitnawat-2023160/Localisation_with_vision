@@ -11,8 +11,26 @@ __pycache__/
 
 # Large runtime data and generated validation artifacts
 *.bag
+*.bag.active
+*.db3
+*.mcap
+*.pcd
+*.ply
+*.npz
+*.h5
+*.sqlite
+*.sqlite3
 results/
 step3_global/
+/results_archive/
+/release/
+/reports/
+/outputs/
+/data/
+/datasets/
+/rosbag/
+/maps/*
+!/maps/.gitkeep
 
 # Editor / OS noise
 *.swp

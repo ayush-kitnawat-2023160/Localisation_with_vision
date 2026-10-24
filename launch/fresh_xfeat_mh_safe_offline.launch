@@ -1,0 +1,32 @@
+<launch>
+  <!-- EXPERIMENTAL: GPS-free LiDAR MH + XFeat candidate and review stack.
+       RUN ONLY on offline bags until physical extrinsics, vehicle brake
+       interlocks, and planner stop handling are independently certified.
+       No /pose publication; no automatic localization reset; no control.
+       Learned XFeat retrieval service must be started separately.
+  -->
+  <arg name="use_sim_time" default="true"/>
+  <arg name="map_db" default="$(find fast_livo2)/maps/campus_full_lio_226s_20261019"/>
+  <arg name="calibration_file"
+       default="$(find fast_livo2)/config/calibration/zedx_current.yaml"/>
+  <arg name="learned_worker_url" default="http://127.0.0.1:18091/localize"/>
+  <arg name="mh_reacquire_hz" default="1.0"/>
+
+  <include file="$(find fast_livo2)/launch/fresh_multimodal_global_rosbag.launch">
+    <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+    <arg name="map_db" value="$(arg map_db)"/>
+    <arg name="calibration_file" value="$(arg calibration_file)"/>
+    <arg name="publish_legacy_pose" value="false"/>
+    <arg name="visual_global_enable" value="false"/>
+    <arg name="lidar_global_enable" value="true"/>
+    <arg name="lidar_gps_soft_prior_enable" value="false"/>
+    <arg name="lidar_mh_enable" value="true"/>
+    <arg name="lidar_mh_required_hits" value="3"/>
+    <arg name="lidar_mh_max_reanchor_m" value="4.0"/>
+    <arg name="lidar_mh_reacquire_hz" value="$(arg mh_reacquire_hz)"/>
+    <arg name="lidar_mh_visual_seed_enable" value="true"/>
+    <arg name="visual_learned_enable" value="true"/>
+    <arg name="visual_learned_worker_url" value="$(arg learned_worker_url)"/>
+    <arg name="lidar_handoff_review_enable" value="true"/>
+  </include>
+</launch>

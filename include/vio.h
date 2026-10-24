@@ -103,6 +103,9 @@ public:
   // and all actual visual-update frames use the unchanged full VIO path.
   bool gated_visual_fastpath_enable = false;
   bool colorize_only_en = false;
+  // Offline profiling only: retain sparse visual-map retrieval/building but
+  // never apply a photometric correction to the estimator's shared ESIKF.
+  bool diagnostic_tracking_only_en = false;
   // Healthy-mode visual residuals are allowed to update the same ESIKF only
   // while the outer sensor-health gate says the camera is trustworthy.  Even
   // then, reject a single photometric update if it tries to bend the shared
@@ -122,6 +125,9 @@ public:
   double fx, fy, cx, cy;
   int patch_pyrimid_level, patch_size, patch_size_total, patch_size_half, border, warp_len;
   int max_iterations, total_points;
+  int minimum_visual_update_points = 24;
+  int safe_visual_points = 0;
+  bool visual_update_level_applied = false;
 
   double img_point_cov, outlier_threshold, ncc_thre;
   
@@ -145,6 +151,7 @@ public:
   unordered_map<int, Warp *> warp_map;
   vector<VisualPoint *> retrieve_voxel_points;
   vector<pointWithVar> append_voxel_points;
+  vector<bool> reference_patch_valid;
   FramePtr new_frame_;
   cv::Mat img_cp, img_rgb, img_test;
 
